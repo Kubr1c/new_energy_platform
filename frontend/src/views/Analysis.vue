@@ -1,0 +1,688 @@
+<template>
+  <div class="analysis-container">
+    <div class="header-section">
+      <h1 class="page-title">
+        <el-icon><DataAnalysis /></el-icon>
+        算法对比分析
+      </h1>
+      <p class="subtitle">深度学习时间序列预测模型与启发式调度算法横向性能对比</p>
+    </div>
+
+    <el-tabs v-model="activeTab" class="analysis-tabs" @tab-click="handleTabClick">
+      
+      <!-- 预测模型对比 Tab -->
+      <el-tab-pane label="深度预测模型对比" name="model">
+        <div class="control-panel">
+          <div class="panel-header">
+            <h3>模型选择与配置</h3>
+            <el-button type="primary" @click="runModelComparison" :loading="modelLoading">
+              运行全维对比
+              <el-icon class="el-icon--right"><VideoPlay /></el-icon>
+            </el-button>
+          </div>
+          <div class="panel-body">
+            <el-checkbox-group v-model="selectedModels" class="glass-checkbox-group">
+              <el-checkbox v-for="model in availableModels" :key="model.value" :label="model.value" border>
+                {{ model.label }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </div>
+        </div>
+
+        <div class="charts-grid" v-loading="modelLoading" element-loading-text="全维数据张量计算中，请稍候..." element-loading-background="rgba(11, 15, 25, 0.7)">
+          
+          <!-- 性能雷达图 -->
+          <div class="chart-card radar-card">
+            <div class="card-header">
+              <h4>
+                <el-icon><Aim /></el-icon>
+                综合性能评估雷达
+              </h4>
+            </div>
+            <div class="card-body">
+              <div ref="radarChartRef" class="chart-container"></div>
+            </div>
+          </div>
+          
+          <!-- 模型评价指标表格 -->
+          <div class="chart-card table-card">
+            <div class="card-header">
+              <h4>
+                <el-icon><DataLine /></el-icon>
+                预测精度量化分析
+              </h4>
+            </div>
+            <div class="card-body custom-table-wrapper">
+              <el-table :data="modelMetricsList" style="width: 100%" :row-class-name="tableRowClassName">
+                <el-table-column prop="modelName" label="模型名称" width="160"></el-table-column>
+                <el-table-column prop="mape" label="MAPE (%)" align="center">
+                  <template #default="scope">
+                    <span :class="{'best-value': isBestMetric('mape', scope.row.mape)}">{{ scope.row.mape }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="rmse" label="RMSE" align="center">
+                  <template #default="scope">
+                    <span :class="{'best-value': isBestMetric('rmse', scope.row.rmse)}">{{ scope.row.rmse }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="mae" label="MAE" align="center">
+                  <template #default="scope">
+                    <span :class="{'best-value': isBestMetric('mae', scope.row.mae)}">{{ scope.row.mae }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- 风电预测拟合曲线 -->
+          <div class="chart-card full-width">
+            <div class="card-header">
+              <h4>
+                <el-icon><TrendCharts /></el-icon>
+                未来24小时风力发电功率预测序列叠加比对
+              </h4>
+            </div>
+            <div class="card-body">
+              <div ref="windLineChartRef" class="chart-container extended-height"></div>
+            </div>
+          </div>
+
+        </div>
+      </el-tab-pane>
+
+      <!-- 优化算法对比 Tab -->
+      <el-tab-pane label="调度算法群智寻优对比" name="algorithm">
+        <div class="control-panel">
+          <div class="panel-header">
+            <h3>算法池配置</h3>
+            <el-button type="success" @click="runAlgorithmComparison" :loading="algoLoading">
+              开启群智解算 (并行)
+              <el-icon class="el-icon--right"><Cpu /></el-icon>
+            </el-button>
+          </div>
+          <div class="panel-body">
+            <el-checkbox-group v-model="selectedAlgos" class="glass-checkbox-group">
+              <el-checkbox label="awpso" border>自适应权重粒子群 (AWPSO)</el-checkbox>
+              <el-checkbox label="pso" border>经典粒子群 (PSO)</el-checkbox>
+              <el-checkbox label="ga" border>遗传算法 (GA)</el-checkbox>
+            </el-checkbox-group>
+          </div>
+        </div>
+
+        <div class="charts-grid" v-loading="algoLoading" element-loading-text="正构建多维度帕累托寻优空间，求解中..." element-loading-background="rgba(11, 15, 25, 0.7)">
+          
+          <!-- 收敛曲线图 -->
+          <div class="chart-card full-width">
+            <div class="card-header">
+              <h4>
+                <el-icon><Share /></el-icon>
+                寻优代数 - 适应度轨迹 (Convergence Map)
+              </h4>
+            </div>
+            <div class="card-body">
+              <div ref="convergenceChartRef" class="chart-container extended-height"></div>
+            </div>
+          </div>
+
+          <!-- 调度收益对比 -->
+          <div class="chart-card half-width">
+            <div class="card-header">
+              <h4>
+                <el-icon><Money /></el-icon>
+                日运行综合成本比较
+              </h4>
+            </div>
+            <div class="card-body">
+              <div ref="costBarChartRef" class="chart-container"></div>
+            </div>
+          </div>
+          
+          <!-- 耗时与弃电率对比 -->
+          <div class="chart-card half-width">
+            <div class="card-header">
+              <h4>
+                <el-icon><Timer /></el-icon>
+                开销与弃风光率测算
+              </h4>
+            </div>
+            <div class="card-body custom-table-wrapper">
+              <el-table :data="algoMetricsList" style="width: 100%">
+                <el-table-column prop="algoName" label="启发式算法" width="160"></el-table-column>
+                <el-table-column prop="time_cost" label="计算耗时 (s)" align="center">
+                  <template #default="scope">
+                    <el-tag :type="scope.row.time_cost < 1 ? 'success' : 'warning'" effect="dark">
+                      {{ scope.row.time_cost }} s
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="abandon_rate" label="光风弃电率" align="center">
+                  <template #default="scope">
+                    <span class="gradient-text">{{ (scope.row.abandon_rate * 100).toFixed(2) }}%</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+          
+        </div>
+      </el-tab-pane>
+    </el-tabs>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted, nextTick, shallowRef, onBeforeUnmount } from 'vue'
+import { DataAnalysis, VideoPlay, Aim, DataLine, TrendCharts, Share, Cpu, Money, Timer } from '@element-plus/icons-vue'
+import axios from 'axios'
+import * as echarts from 'echarts'
+
+const activeTab = ref('model')
+
+// ----------------- Model Comparison -----------------
+const selectedModels = ref(['attention_lstm', 'cnn_lstm', 'standard_lstm'])
+const availableModels = [
+  { label: 'Attention-LSTM (基石基线)', value: 'attention_lstm' },
+  { label: 'CNN-LSTM (时空耦合)', value: 'cnn_lstm' },
+  { label: '标准 LSTM (单维向)', value: 'standard_lstm' },
+  { label: 'GRU (门控循环替代)', value: 'gru' },
+  { label: 'Transformer (纯注意力焦点)', value: 'transformer' }
+]
+
+const modelLoading = ref(false)
+const modelData = reactive({ results: {} })
+const modelMetricsList = ref([])
+
+// Models UI References
+const radarChartRef = ref(null)
+const windLineChartRef = ref(null)
+let radarChart = null
+let windLineChart = null
+
+const runModelComparison = async () => {
+  if (selectedModels.value.length === 0) return
+  modelLoading.value = true
+  try {
+    const res = await axios.post('/api/analysis/model_compare', {
+      models: selectedModels.value
+    })
+    if (res.data && res.data.code === 200) {
+      modelData.results = res.data.data
+      processModelMetrics()
+      await nextTick()
+      renderRadarChart()
+      renderWindLineChart()
+    }
+  } catch (err) {
+    console.error('模型比较提取失败:', err)
+  } finally {
+    modelLoading.value = false
+  }
+}
+
+const getModelLabel = (val) => availableModels.find(m => m.value === val)?.label.split(' ')[0] || val
+
+const processModelMetrics = () => {
+  modelMetricsList.value = []
+  for (const [mName, mData] of Object.entries(modelData.results)) {
+    modelMetricsList.value.push({
+      modelKey: mName,
+      modelName: getModelLabel(mName),
+      ...mData.metrics
+    })
+  }
+  // Sort by MAPE
+  modelMetricsList.value.sort((a, b) => a.mape - b.mape)
+}
+
+const isBestMetric = (key, value) => {
+  if (modelMetricsList.value.length === 0) return false
+  const minVal = Math.min(...modelMetricsList.value.map(item => item[key]))
+  return value === minVal
+}
+
+const tableRowClassName = ({ rowIndex }) => {
+  if (rowIndex === 0) return 'best-row'
+  return ''
+}
+
+const renderRadarChart = () => {
+  if (!radarChartRef.value) return
+  if (!radarChart) radarChart = echarts.init(radarChartRef.value)
+  
+  const seriesData = []
+  const maxMape = Math.max(...modelMetricsList.value.map(i => i.mape)) * 1.2 || 10
+  const maxRmse = Math.max(...modelMetricsList.value.map(i => i.rmse)) * 1.2 || 30
+  const maxMae = Math.max(...modelMetricsList.value.map(i => i.mae)) * 1.2 || 20
+  
+  // ECharts default colors mapped to dynamic palette
+  const colors = ['#00f2fe', '#fbc2eb', '#f6d365', '#a18cd1', '#ff9a9e']
+
+  modelMetricsList.value.forEach((item, idx) => {
+    seriesData.push({
+      value: [maxMape - item.mape, maxRmse - item.rmse, maxMae - item.mae],
+      name: item.modelName,
+      lineStyle: { width: 2, color: colors[idx % colors.length] },
+      areaStyle: {
+        color: new echarts.graphic.RadialGradient(0.5, 0.5, 1, [
+          { offset: 0, color: colors[idx % colors.length] + '22' },
+          { offset: 1, color: colors[idx % colors.length] + '88' }
+        ])
+      }
+    })
+  })
+
+  // Normalize mapping for radar (since smaller metric is better, we inverted it above conceptually for radar spread)
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'item' },
+    legend: {
+      data: modelMetricsList.value.map(i => i.modelName),
+      bottom: 0,
+      textStyle: { color: '#aab2cd' }
+    },
+    radar: {
+      shape: 'circle',
+      indicator: [
+        { name: '100-MAPE', max: maxMape },
+        { name: '100-RMSE', max: maxRmse },
+        { name: '100-MAE', max: maxMae }
+      ],
+      splitNumber: 4,
+      axisName: { color: '#00f2fe', fontSize: 13 },
+      splitLine: {
+        lineStyle: {
+          color: ['rgba(0, 242, 254, 0.1)', 'rgba(0, 242, 254, 0.2)', 'rgba(0, 242, 254, 0.4)', 'rgba(0, 242, 254, 0.6)'].reverse()
+        }
+      },
+      splitArea: { show: false },
+      axisLine: { lineStyle: { color: 'rgba(0, 242, 254, 0.5)' } }
+    },
+    series: [{
+      name: 'Metrics Radar',
+      type: 'radar',
+      data: seriesData
+    }]
+  }
+  radarChart.setOption(option)
+}
+
+const renderWindLineChart = () => {
+  if (!windLineChartRef.value) return
+  if (!windLineChart) windLineChart = echarts.init(windLineChartRef.value)
+
+  const hours = Array.from({length: 24}, (_, i) => `${i}:00`)
+  const seriesData = []
+  
+  Object.entries(modelData.results).forEach(([mName, mData]) => {
+    seriesData.push({
+      name: getModelLabel(mName),
+      type: 'line',
+      smooth: true,
+      symbol: 'none',
+      data: mData.predictions.wind_power,
+      lineStyle: { width: 3 },
+      emphasis: { focus: 'series' }
+    })
+  })
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis' },
+    legend: {
+      textStyle: { color: '#aab2cd' },
+      top: 10
+    },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: hours,
+      axisLabel: { color: '#aab2cd' },
+      axisLine: { lineStyle: { color: '#3d4465' } }
+    },
+    yAxis: {
+      type: 'value',
+      name: '风电功率(MW)',
+      nameTextStyle: { color: '#aab2cd' },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
+      axisLabel: { color: '#aab2cd' }
+    },
+    series: seriesData
+  }
+  windLineChart.setOption(option)
+}
+
+// ----------------- Algorithm Comparison -----------------
+const selectedAlgos = ref(['awpso', 'pso', 'ga'])
+const algoLoading = ref(false)
+const algoData = reactive({ results: {} })
+const algoMetricsList = ref([])
+
+// Alg UI References
+const convergenceChartRef = ref(null)
+const costBarChartRef = ref(null)
+let convergenceChart = null
+let costBarChart = null
+
+const runAlgorithmComparison = async () => {
+  if (selectedAlgos.value.length === 0) return
+  algoLoading.value = true
+  try {
+    const res = await axios.post('/api/analysis/algorithm_compare', {
+      algorithms: selectedAlgos.value
+    })
+    if (res.data && res.data.code === 200) {
+      algoData.results = res.data.data
+      processAlgoMetrics()
+      await nextTick()
+      renderConvergenceChart()
+      renderCostBarChart()
+    }
+  } catch (err) {
+    console.error('算法对比提取失败:', err)
+  } finally {
+    algoLoading.value = false
+  }
+}
+
+const getAlgoLabel = (val) => {
+  const map = { 'awpso': '自适应权重PSO', 'pso': '经典粒子群', 'ga': '遗传算法' }
+  return map[val] || val.toUpperCase()
+}
+
+const processAlgoMetrics = () => {
+  algoMetricsList.value = []
+  for (const [aName, aData] of Object.entries(algoData.results)) {
+    algoMetricsList.value.push({
+      algoKey: aName,
+      algoName: getAlgoLabel(aName),
+      time_cost: aData.time_cost,
+      abandon_rate: aData.abandon_rate,
+      total_cost: aData.total_cost
+    })
+  }
+  algoMetricsList.value.sort((a, b) => a.total_cost - b.total_cost)
+}
+
+const renderConvergenceChart = () => {
+  if (!convergenceChartRef.value) return
+  if (!convergenceChart) convergenceChart = echarts.init(convergenceChartRef.value)
+  
+  const seriesData = []
+  let maxIters = 0
+  
+  Object.entries(algoData.results).forEach(([aName, aData]) => {
+    const hist = aData.fitness_history || []
+    if (hist.length > maxIters) maxIters = hist.length
+    seriesData.push({
+      name: getAlgoLabel(aName),
+      type: 'line',
+      smooth: false,
+      symbol: 'none',
+      data: hist,
+      lineStyle: { width: 3 },
+      emphasis: { focus: 'series' }
+    })
+  })
+  
+  const xData = Array.from({length: maxIters}, (_, i) => i * 50)  // Our history saves every 50 iters
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis' },
+    legend: {
+      textStyle: { color: '#aab2cd' },
+      top: 10
+    },
+    grid: { left: '4%', right: '4%', bottom: '5%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      name: '迭代次数',
+      nameLocation: 'middle',
+      nameGap: 25,
+      data: xData,
+      axisLabel: { color: '#aab2cd' },
+      axisLine: { lineStyle: { color: '#3d4465' } }
+    },
+    yAxis: {
+      type: 'log',
+      name: '全局最佳适应度(Log)',
+      nameTextStyle: { color: '#aab2cd' },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
+      axisLabel: { color: '#aab2cd' }
+    },
+    series: seriesData
+  }
+  convergenceChart.setOption(option)
+}
+
+const renderCostBarChart = () => {
+  if (!costBarChartRef.value) return
+  if (!costBarChart) costBarChart = echarts.init(costBarChartRef.value)
+  
+  const names = algoMetricsList.value.map(i => i.algoName)
+  const costs = algoMetricsList.value.map(i => i.total_cost)
+  
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: names,
+      axisLabel: { color: '#aab2cd', interval: 0 },
+      axisLine: { lineStyle: { color: '#3d4465' } }
+    },
+    yAxis: {
+      type: 'value',
+      name: '综合调度成本(元)',
+      nameTextStyle: { color: '#aab2cd' },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
+      axisLabel: { color: '#aab2cd' }
+    },
+    series: [{
+      name: '总成本',
+      type: 'bar',
+      barWidth: '40%',
+      data: costs.map((val, idx) => ({
+        value: val,
+        itemStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: idx === 0 ? '#00f2fe' : '#a18cd1' },
+            { offset: 1, color: idx === 0 ? '#4facfe' : '#fbc2eb' }
+          ]),
+          borderRadius: [4, 4, 0, 0]
+        }
+      }))
+    }]
+  }
+  costBarChart.setOption(option)
+}
+
+// ----------------- Resize Handler -----------------
+const handleResize = () => {
+  radarChart?.resize()
+  windLineChart?.resize()
+  convergenceChart?.resize()
+  costBarChart?.resize()
+}
+
+const handleTabClick = () => {
+  setTimeout(() => {
+    handleResize()
+  }, 100)
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+  // Initially run model comparison on load to show something immediately
+  runModelComparison()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  radarChart?.dispose()
+  windLineChart?.dispose()
+  convergenceChart?.dispose()
+  costBarChart?.dispose()
+})
+</script>
+
+<style scoped>
+.analysis-container {
+  padding: 24px;
+  min-height: calc(100vh - 60px);
+  background-color: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+}
+
+.header-section {
+  margin-bottom: 24px;
+}
+
+.page-title {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+
+.analysis-tabs :deep(.el-tabs__item) {
+  font-size: 16px;
+  height: 48px;
+  line-height: 48px;
+}
+
+.control-panel {
+  background: rgba(25, 30, 48, 0.4);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-header h3 {
+  margin: 0;
+  font-weight: 500;
+  color: #e0e6ed;
+}
+
+.panel-body {
+  padding: 20px 24px;
+}
+
+.glass-checkbox-group :deep(.el-checkbox) {
+  margin-right: 16px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #aab2cd;
+}
+
+.glass-checkbox-group :deep(.el-checkbox.is-checked) {
+  background: rgba(0, 242, 254, 0.1);
+  border-color: #00f2fe;
+}
+
+.charts-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.chart-card {
+  background: rgba(25, 30, 48, 0.4);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.radar-card { flex: 1; min-width: 350px; }
+.table-card { flex: 2; min-width: 500px; }
+.full-width { width: 100%; flex: 0 0 100%; }
+.half-width { flex: 1; min-width: 450px; }
+
+.card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.card-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: #c9d1df;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-body {
+  padding: 20px;
+  flex: 1;
+}
+
+.chart-container {
+  width: 100%;
+  height: 300px;
+}
+
+.extended-height {
+  height: 400px;
+}
+
+/* Custom Table Styles for Dark Theme */
+.custom-table-wrapper :deep(.el-table) {
+  background-color: transparent !important;
+  --el-table-border-color: rgba(255, 255, 255, 0.05);
+  --el-table-header-bg-color: rgba(0, 0, 0, 0.3);
+  --el-table-row-hover-bg-color: rgba(0, 242, 254, 0.05);
+}
+.custom-table-wrapper :deep(.el-table tr),
+.custom-table-wrapper :deep(.el-table th.el-table__cell) {
+  background-color: transparent !important;
+  color: #aab2cd;
+}
+
+.custom-table-wrapper :deep(.best-row) {
+  background-color: rgba(0, 242, 254, 0.03) !important;
+}
+
+.best-value {
+  color: #00f2fe;
+  font-weight: bold;
+  text-shadow: 0 0 8px rgba(0, 242, 254, 0.4);
+}
+
+.gradient-text {
+  background: linear-gradient(90deg, #fbc2eb 0%, #a18cd1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: bold;
+  font-size: 15px;
+}
+</style>
