@@ -284,29 +284,30 @@ const renderRadarChart = () => {
 
   // Normalize mapping for radar (since smaller metric is better, we inverted it above conceptually for radar spread)
   const option = {
-    backgroundColor: 'transparent',
-    tooltip: { trigger: 'item' },
+    backgroundColor: '#0d1b2a',
+    tooltip: { trigger: 'item', backgroundColor: 'rgba(13,27,42,0.95)', borderColor: '#2a4a6b', textStyle: { color: '#e8f4fd' } },
     legend: {
       data: modelMetricsList.value.map(i => i.modelName),
       bottom: 0,
-      textStyle: { color: '#aab2cd' }
+      textStyle: { color: '#c8dff0', fontSize: 12 },
+      itemWidth: 18, itemHeight: 4
     },
     radar: {
       shape: 'circle',
       indicator: [
         { name: '100-MAPE', max: maxMape },
         { name: '100-RMSE', max: maxRmse },
-        { name: '100-MAE', max: maxMae }
+        { name: '100-MAE',  max: maxMae  }
       ],
       splitNumber: 4,
-      axisName: { color: '#00f2fe', fontSize: 13 },
+      axisName: { color: '#56d4ff', fontSize: 13, fontWeight: 600 },
       splitLine: {
         lineStyle: {
-          color: ['rgba(0, 242, 254, 0.1)', 'rgba(0, 242, 254, 0.2)', 'rgba(0, 242, 254, 0.4)', 'rgba(0, 242, 254, 0.6)'].reverse()
+          color: ['#0f2a3e', '#142f45', '#1a374f', '#203f5a']
         }
       },
-      splitArea: { show: false },
-      axisLine: { lineStyle: { color: 'rgba(0, 242, 254, 0.5)' } }
+      splitArea: { areaStyle: { color: ['rgba(13,27,42,0.6)', 'rgba(14,31,51,0.6)', 'rgba(13,27,42,0.6)', 'rgba(14,31,51,0.6)'] } },
+      axisLine: { lineStyle: { color: '#1e3a5f' } }
     },
     series: [{
       name: 'Metrics Radar',
@@ -319,41 +320,47 @@ const renderRadarChart = () => {
 
 const renderWindLineChart = () => {
   if (!windLineChartRef.value) return
-  if (!windLineChart) windLineChart = echarts.init(windLineChartRef.value)
 
-  // X 轴：优先使用真实时间戳标签，回退到 0:00~23:00
-  const xLabels = (groundTruth.value && groundTruth.value.timestamps)
+  // 每次渲染前销毁旧实例，确保 series 列表完整替换（避免 merge 模式遗留旧系列）
+  if (windLineChart) {
+    windLineChart.dispose()
+    windLineChart = null
+  }
+  windLineChart = echarts.init(windLineChartRef.value)
+
+  // X 轴：优先使用真实时间戳，回退到 0:00~23:00
+  const xLabels = (groundTruth.value && groundTruth.value.timestamps && groundTruth.value.timestamps.length > 0)
     ? groundTruth.value.timestamps
     : Array.from({length: 24}, (_, i) => `${i}:00`)
 
-  const modelColors = ['#00f2fe', '#fbc2eb', '#f6d365', '#a18cd1', '#ff9a9e']
+  // 高饱和度模型配色
+  const modelColors = ['#00cfff', '#ff6b6b', '#ffd166', '#06d6a0', '#c77dff']
   const seriesData = []
 
-  // ---- 真实值曲线（最突出，放在所有模型曲线之后，视觉上置于顶层）----
-  if (groundTruth.value && groundTruth.value.wind_power) {
+  // ---- 真实值曲线（白色实线 + 圆点，最粗最突出）----
+  const gt = groundTruth.value
+  if (gt && Array.isArray(gt.wind_power) && gt.wind_power.length > 0) {
     seriesData.push({
-      name: '真实值',
+      name: '■ 真实值',
       type: 'line',
       smooth: false,
       symbol: 'circle',
-      symbolSize: 5,
-      data: groundTruth.value.wind_power,
-      lineStyle: { width: 3, color: '#ffffff', type: 'dashed' },
-      itemStyle: { color: '#ffffff' },
-      zlevel: 10,
-      z: 10,
-      emphasis: { focus: 'series' }
+      symbolSize: 6,
+      data: gt.wind_power,
+      lineStyle: { width: 3.5, color: '#ffffff' },
+      itemStyle: { color: '#ffffff', borderWidth: 2, borderColor: '#ffffff' },
+      z: 100,
+      emphasis: { focus: 'series', lineStyle: { width: 5 } }
     })
   }
 
   // ---- 各模型预测曲线 ----
   Object.entries(modelData.results).forEach(([mName, mData], idx) => {
     const color = modelColors[idx % modelColors.length]
-    // 计算该模型在这 24 步上的简单 MAE（与真实值配对）
     let stepMae = null
-    if (groundTruth.value && groundTruth.value.wind_power && mData.predictions.wind_power) {
+    if (gt && Array.isArray(gt.wind_power) && Array.isArray(mData.predictions?.wind_power)) {
       const preds   = mData.predictions.wind_power
-      const actuals = groundTruth.value.wind_power
+      const actuals = gt.wind_power
       const n = Math.min(preds.length, actuals.length)
       if (n > 0) {
         stepMae = (preds.slice(0, n).reduce(
@@ -362,61 +369,74 @@ const renderWindLineChart = () => {
       }
     }
     const label = getModelLabel(mName)
-    const seriesName = stepMae !== null ? `${label} (MAE=${stepMae})` : label
+    const seriesName = stepMae !== null ? `${label}（MAE=${stepMae}）` : label
 
     seriesData.push({
       name: seriesName,
       type: 'line',
       smooth: true,
       symbol: 'none',
-      data: mData.predictions.wind_power,
-      lineStyle: { width: 2.5, color },
+      data: mData.predictions?.wind_power || [],
+      lineStyle: { width: 2.5, color, type: 'solid' },
       itemStyle: { color },
-      emphasis: { focus: 'series' }
+      z: 10 + idx,
+      emphasis: { focus: 'series', lineStyle: { width: 4 } }
     })
   })
 
   const option = {
-    backgroundColor: 'transparent',
+    backgroundColor: '#0d1b2a',
     tooltip: {
       trigger: 'axis',
+      backgroundColor: 'rgba(13,27,42,0.95)',
+      borderColor: '#2a4a6b',
+      borderWidth: 1,
+      textStyle: { color: '#e8f4fd', fontSize: 12 },
       formatter: (params) => {
-        let html = `<div style="font-size:12px"><b>${params[0].axisValue}</b><br/>`
+        let html = `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#7ecfff">${params[0]?.axisValue}</div>`
         params.forEach(p => {
-          const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:5px"></span>`
-          html += `${dot}${p.seriesName}: <b>${p.value !== undefined ? Number(p.value).toFixed(2) : '--'} MW</b><br/>`
+          const isReal = p.seriesName.includes('真实值')
+          const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:6px;${isReal ? 'border:2px solid #fff' : ''}"></span>`
+          const valStr = p.value !== undefined ? Number(p.value).toFixed(2) : '--'
+          const weight = isReal ? 'font-weight:700' : ''
+          html += `<div style="${weight};line-height:22px">${dot}${p.seriesName}: <b style="color:${p.color}">${valStr} MW</b></div>`
         })
-        html += '</div>'
         return html
       }
     },
     legend: {
-      textStyle: { color: '#aab2cd', fontSize: 11 },
+      textStyle: { color: '#d0e8ff', fontSize: 12, fontWeight: '500' },
       top: 8,
-      icon: 'roundRect'
+      icon: 'roundRect',
+      itemWidth: 20,
+      itemHeight: 4,
+      itemGap: 16
     },
-    grid: { left: '3%', right: '4%', bottom: '8%', top: '15%', containLabel: true },
+    grid: { left: '4%', right: '3%', bottom: '12%', top: '14%', containLabel: true },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: xLabels,
       axisLabel: {
-        color: '#aab2cd',
-        fontSize: 10,
-        rotate: xLabels.some(l => l.includes('-')) ? 30 : 0  // 有日期时旋转
+        color: '#8ab4d4',
+        fontSize: 11,
+        rotate: xLabels.some(l => l.includes('-')) ? 35 : 0
       },
-      axisLine: { lineStyle: { color: '#3d4465' } }
+      axisLine: { lineStyle: { color: '#1e3a5f', width: 1.5 } },
+      splitLine: { show: false }
     },
     yAxis: {
       type: 'value',
-      name: '风电功率(MW)',
-      nameTextStyle: { color: '#aab2cd' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-      axisLabel: { color: '#aab2cd' }
+      name: '风电功率 (MW)',
+      nameTextStyle: { color: '#8ab4d4', fontSize: 12 },
+      splitLine: { lineStyle: { color: '#162d45', type: 'dashed' } },
+      axisLabel: { color: '#8ab4d4', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#1e3a5f' } }
     },
     series: seriesData
   }
-  windLineChart.setOption(option)
+  // 第二参数 true = 替换模式，彻底清除旧 series
+  windLineChart.setOption(option, true)
 }
 
 // ----------------- Algorithm Comparison -----------------
@@ -495,29 +515,29 @@ const renderConvergenceChart = () => {
   const xData = Array.from({length: maxIters}, (_, i) => i * 50)  // Our history saves every 50 iters
 
   const option = {
-    backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis' },
-    legend: {
-      textStyle: { color: '#aab2cd' },
-      top: 10
-    },
-    grid: { left: '4%', right: '4%', bottom: '5%', containLabel: true },
+    backgroundColor: '#0d1b2a',
+    tooltip: { trigger: 'axis', backgroundColor: 'rgba(13,27,42,0.95)', borderColor: '#2a4a6b', textStyle: { color: '#e8f4fd' } },
+    legend: { textStyle: { color: '#c8dff0', fontSize: 12 }, top: 10, itemWidth: 20, itemHeight: 3 },
+    grid: { left: '4%', right: '4%', bottom: '8%', containLabel: true },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       name: '迭代次数',
       nameLocation: 'middle',
-      nameGap: 25,
+      nameGap: 28,
+      nameTextStyle: { color: '#7ecfff', fontSize: 12 },
       data: xData,
-      axisLabel: { color: '#aab2cd' },
-      axisLine: { lineStyle: { color: '#3d4465' } }
+      axisLabel: { color: '#8ab4d4', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#1e3a5f' } },
+      splitLine: { show: false }
     },
     yAxis: {
       type: 'log',
       name: '全局最佳适应度(Log)',
-      nameTextStyle: { color: '#aab2cd' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-      axisLabel: { color: '#aab2cd' }
+      nameTextStyle: { color: '#7ecfff', fontSize: 12 },
+      splitLine: { lineStyle: { color: '#162d45', type: 'dashed' } },
+      axisLabel: { color: '#8ab4d4', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#1e3a5f' } }
     },
     series: seriesData
   }
@@ -532,21 +552,23 @@ const renderCostBarChart = () => {
   const costs = algoMetricsList.value.map(i => i.total_cost)
   
   const option = {
-    backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    backgroundColor: '#0d1b2a',
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: 'rgba(13,27,42,0.95)', borderColor: '#2a4a6b', textStyle: { color: '#e8f4fd' } },
+    grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
     xAxis: {
       type: 'category',
       data: names,
-      axisLabel: { color: '#aab2cd', interval: 0 },
-      axisLine: { lineStyle: { color: '#3d4465' } }
+      axisLabel: { color: '#8ab4d4', fontSize: 12, interval: 0 },
+      axisLine: { lineStyle: { color: '#1e3a5f' } },
+      splitLine: { show: false }
     },
     yAxis: {
       type: 'value',
       name: '综合调度成本(元)',
-      nameTextStyle: { color: '#aab2cd' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-      axisLabel: { color: '#aab2cd' }
+      nameTextStyle: { color: '#7ecfff', fontSize: 12 },
+      splitLine: { lineStyle: { color: '#162d45', type: 'dashed' } },
+      axisLabel: { color: '#8ab4d4', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#1e3a5f' } }
     },
     series: [{
       name: '总成本',
@@ -597,61 +619,90 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* ============================================================
+   全局：深蓝科技主题，高对比度，方便阅读
+   ============================================================ */
 .analysis-container {
   padding: 24px;
   min-height: calc(100vh - 60px);
-  background-color: var(--el-bg-color);
-  color: var(--el-text-color-primary);
+  background: linear-gradient(160deg, #06111f 0%, #0a1a2e 50%, #0c1f38 100%);
+  color: #e8f4fd;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 .header-section {
-  margin-bottom: 24px;
+  margin-bottom: 28px;
 }
 
 .page-title {
   margin: 0 0 8px 0;
-  font-size: 28px;
+  font-size: 26px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   gap: 12px;
-  background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+  background: linear-gradient(90deg, #56d4ff 0%, #38b6ff 50%, #6ec6ff 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  letter-spacing: 1px;
 }
 
 .subtitle {
   margin: 0;
-  color: var(--el-text-color-secondary);
+  color: #7ecfff;
   font-size: 14px;
+  letter-spacing: 0.5px;
 }
 
+/* ============================================================
+   Tabs
+   ============================================================ */
 .analysis-tabs :deep(.el-tabs__item) {
-  font-size: 16px;
-  height: 48px;
-  line-height: 48px;
+  font-size: 15px;
+  height: 46px;
+  line-height: 46px;
+  color: #7ecfff;
+  font-weight: 500;
+}
+.analysis-tabs :deep(.el-tabs__item.is-active) {
+  color: #38d9ff;
+  font-weight: 700;
+}
+.analysis-tabs :deep(.el-tabs__active-bar) {
+  background: linear-gradient(90deg, #38d9ff, #56d4ff);
+  height: 3px;
+  border-radius: 2px;
+}
+.analysis-tabs :deep(.el-tabs__nav-wrap::after) {
+  background-color: #1a3550;
 }
 
+/* ============================================================
+   控制面板
+   ============================================================ */
 .control-panel {
-  background: rgba(25, 30, 48, 0.4);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(135deg, #0e1f33 0%, #112840 100%);
+  border: 1px solid #1e3a5f;
   border-radius: 12px;
   margin-bottom: 24px;
   overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 100, 180, 0.15);
 }
 
 .panel-header {
   padding: 16px 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid #1e3a5f;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  background: rgba(0, 100, 180, 0.08);
 }
 
 .panel-header h3 {
   margin: 0;
-  font-weight: 500;
-  color: #e0e6ed;
+  font-weight: 600;
+  font-size: 15px;
+  color: #d0e8ff;
 }
 
 .panel-body {
@@ -661,16 +712,22 @@ onBeforeUnmount(() => {
 .glass-checkbox-group :deep(.el-checkbox) {
   margin-right: 16px;
   margin-bottom: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(255, 255, 255, 0.1);
-  color: #aab2cd;
+  background: rgba(30, 58, 95, 0.4);
+  border-color: #2a5080;
+  color: #9ecff0;
+  font-size: 13px;
 }
-
 .glass-checkbox-group :deep(.el-checkbox.is-checked) {
-  background: rgba(0, 242, 254, 0.1);
-  border-color: #00f2fe;
+  background: rgba(56, 217, 255, 0.12);
+  border-color: #38d9ff;
+}
+.glass-checkbox-group :deep(.el-checkbox.is-checked .el-checkbox__label) {
+  color: #38d9ff;
 }
 
+/* ============================================================
+   图表网格和卡片
+   ============================================================ */
 .charts-grid {
   display: flex;
   flex-wrap: wrap;
@@ -678,13 +735,17 @@ onBeforeUnmount(() => {
 }
 
 .chart-card {
-  background: rgba(25, 30, 48, 0.4);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(135deg, #0e1f33 0%, #112840 100%);
+  border: 1px solid #1e3a5f;
   border-radius: 12px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0, 80, 160, 0.2);
+  transition: box-shadow 0.2s;
+}
+.chart-card:hover {
+  box-shadow: 0 6px 32px rgba(56, 217, 255, 0.15);
 }
 
 .radar-card { flex: 1; min-width: 350px; }
@@ -692,20 +753,27 @@ onBeforeUnmount(() => {
 .full-width { width: 100%; flex: 0 0 100%; }
 .half-width { flex: 1; min-width: 450px; }
 
+/* ============================================================
+   卡片头部
+   ============================================================ */
 .card-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(0, 0, 0, 0.2);
+  padding: 14px 20px;
+  border-bottom: 1px solid #1e3a5f;
+  background: linear-gradient(90deg, rgba(56,217,255,0.06) 0%, transparent 100%);
 }
 
 .card-header h4 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-  color: #c9d1df;
+  font-size: 15px;
+  font-weight: 600;
+  color: #d0e8ff;
   display: flex;
   align-items: center;
   gap: 8px;
+  letter-spacing: 0.5px;
+}
+.card-header h4 .el-icon {
+  color: #38d9ff;
 }
 
 .card-body {
@@ -719,37 +787,59 @@ onBeforeUnmount(() => {
 }
 
 .extended-height {
-  height: 400px;
+  height: 440px;
 }
 
-/* Custom Table Styles for Dark Theme */
+/* ============================================================
+   表格 — 高对比深蓝主题
+   ============================================================ */
 .custom-table-wrapper :deep(.el-table) {
   background-color: transparent !important;
-  --el-table-border-color: rgba(255, 255, 255, 0.05);
-  --el-table-header-bg-color: rgba(0, 0, 0, 0.3);
-  --el-table-row-hover-bg-color: rgba(0, 242, 254, 0.05);
+  --el-table-border-color: #1e3a5f;
+  --el-table-header-bg-color: rgba(14, 31, 51, 0.9);
+  --el-table-row-hover-bg-color: rgba(56, 217, 255, 0.06);
+  font-size: 13px;
 }
 .custom-table-wrapper :deep(.el-table tr),
-.custom-table-wrapper :deep(.el-table th.el-table__cell) {
+.custom-table-wrapper :deep(.el-table td.el-table__cell) {
   background-color: transparent !important;
-  color: #aab2cd;
+  color: #c8dff0;
+  border-bottom-color: #162d45;
+}
+.custom-table-wrapper :deep(.el-table th.el-table__cell) {
+  background-color: rgba(14, 31, 51, 0.95) !important;
+  color: #7ecfff;
+  font-weight: 600;
+  font-size: 13px;
+  border-bottom: 2px solid #1e3a5f;
+}
+.custom-table-wrapper :deep(.best-row td) {
+  background-color: rgba(56, 217, 255, 0.05) !important;
 }
 
-.custom-table-wrapper :deep(.best-row) {
-  background-color: rgba(0, 242, 254, 0.03) !important;
-}
-
+/* ============================================================
+   最优指标高亮
+   ============================================================ */
 .best-value {
-  color: #00f2fe;
-  font-weight: bold;
-  text-shadow: 0 0 8px rgba(0, 242, 254, 0.4);
+  color: #38d9ff;
+  font-weight: 700;
+  font-size: 14px;
+  text-shadow: 0 0 10px rgba(56, 217, 255, 0.6);
 }
 
 .gradient-text {
-  background: linear-gradient(90deg, #fbc2eb 0%, #a18cd1 100%);
+  background: linear-gradient(90deg, #56d4ff 0%, #38b6ff 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  font-weight: bold;
-  font-size: 15px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* ============================================================
+   雷达图和收敛图也同步改为深色背景
+   ============================================================ */
+.chart-container, .extended-height {
+  background: #0d1b2a;
+  border-radius: 8px;
 }
 </style>
