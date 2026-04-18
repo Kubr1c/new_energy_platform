@@ -1,8 +1,8 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from models.database import db, PredictResult, NewEnergyData
 from models.predict import Predictor
 from models.model_registry import list_available_models
-from models.metrics import evaluate_model_on_testset
+from models.metrics import evaluate_model_on_testset, evaluate_model_on_db_testset
 import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
@@ -18,15 +18,19 @@ _metrics_cache = {}
 
 
 def _get_model_metrics(model_type: str) -> dict:
-    """获取指定模型在测试集上的真实评估指标（带缓存）。"""
+    """
+    获取指定模型在独立测试集（DB 测试段 2023-11-07~12-31）上的真实评估指标。
+    结果带进程级缓存，只在第一次调用时计算，后续复用。
+    训练完新模型后需调用 clear_metrics_cache() 或 POST /api/predict/reload_models 刷新。
+    """
     if model_type not in _metrics_cache:
         try:
             predictor_instance = get_predictor(model_type)
-            result = evaluate_model_on_testset(predictor_instance)
+            # 选项 X：使用 DB 测试段（2023-11-07~12-31），与训练集完全隔离，无泄露
+            app = current_app._get_current_object()
+            result = evaluate_model_on_db_testset(predictor_instance, app)
             overall = result['overall']
-            # 转换为前端期望的字段名，并附加数据质量评分
             mape = overall['mape']
-            # model_accuracy: 100 - overall_mape，clamp 到 [0, 100]
             accuracy = round(max(0.0, min(100.0, 100.0 - mape)), 2)
             _metrics_cache[model_type] = {
                 'model_accuracy': accuracy,
@@ -36,21 +40,62 @@ def _get_model_metrics(model_type: str) -> dict:
                 'r2':             round(overall['r2'],   4),
                 'per_target':     result['per_target'],
                 'n_samples':      result['n_samples'],
+                'test_range':     result.get('test_range', ''),
+                'source':         result.get('source', 'database'),
                 'confidence':     round(max(0.0, min(100.0, accuracy * 0.95)), 1),
                 'data_quality':   min(5, max(1, round(accuracy / 20))),
                 'model_status':   'normal' if mape < 30 else 'warning',
             }
         except Exception as e:
-            # 评估失败时返回占位符，不影响预测功能
-            _metrics_cache[model_type] = {
-                'model_accuracy': None,
-                'mape': None, 'rmse': None, 'mae': None, 'r2': None,
-                'per_target': {}, 'n_samples': 0,
-                'confidence': None, 'data_quality': None,
-                'model_status': 'error',
-                'error': str(e),
-            }
+            # 评估失败（如 DB 不可用）时降级到 CSV 版本
+            try:
+                predictor_instance = get_predictor(model_type)
+                result = evaluate_model_on_testset(predictor_instance)
+                overall = result['overall']
+                mape = overall['mape']
+                accuracy = round(max(0.0, min(100.0, 100.0 - mape)), 2)
+                _metrics_cache[model_type] = {
+                    'model_accuracy': accuracy,
+                    'mape':           round(mape, 2),
+                    'rmse':           round(overall['rmse'], 4),
+                    'mae':            round(overall['mae'],  4),
+                    'r2':             round(overall['r2'],   4),
+                    'per_target':     result['per_target'],
+                    'n_samples':      result['n_samples'],
+                    'test_range':     'test_data.csv (fallback)',
+                    'source':         'csv_fallback',
+                    'confidence':     round(max(0.0, min(100.0, accuracy * 0.95)), 1),
+                    'data_quality':   min(5, max(1, round(accuracy / 20))),
+                    'model_status':   'normal' if mape < 30 else 'warning',
+                }
+            except Exception as e2:
+                # 两种评估均失败时返回占位符，不影响预测功能
+                _metrics_cache[model_type] = {
+                    'model_accuracy': None,
+                    'mape': None, 'rmse': None, 'mae': None, 'r2': None,
+                    'per_target': {}, 'n_samples': 0,
+                    'test_range': '', 'source': 'error',
+                    'confidence': None, 'data_quality': None,
+                    'model_status': 'error',
+                    'error': str(e2),
+                }
     return _metrics_cache[model_type]
+
+
+def clear_metrics_cache(model_type=None):
+    """
+    清除预测器缓存和指标缓存，使下次请求时重新加载权重并重新评估指标。
+    训练完新模型后调用，无需重启服务。
+
+    model_type=None : 清除全部模型的缓存
+    model_type='xx' : 只清除指定模型
+    """
+    if model_type:
+        _metrics_cache.pop(model_type, None)
+        _predictor_cache.pop(model_type, None)
+    else:
+        _metrics_cache.clear()
+        _predictor_cache.clear()
 
 def serialize_prediction_data(data):
     """convert numpy arrays to Python lists for JSON serialization"""
@@ -432,3 +477,26 @@ def batch_delete_predictions():
     except Exception as e:
         db.session.rollback()
         return jsonify({'code': 500, 'message': f'batch deletion error: {str(e)}'})
+
+
+@predict_bp.route('/api/predict/reload_models', methods=['POST'])
+def reload_models():
+    """
+    清除预测器缓存和指标缓存，令服务在下次请求时自动重新加载
+    新的 .pth 权重文件并重新计算测试集指标。训练完成后调用，无需重启服务。
+
+    请求体（可选）:
+        {"model_type": "attention_lstm"}   -- 只刷新指定模型
+        {}                                 -- 刷新全部模型（默认）
+    """
+    try:
+        data = request.json or {}
+        model_type = data.get('model_type', None)
+        clear_metrics_cache(model_type)
+        target = model_type or '全部'
+        return jsonify({
+            'code': 200,
+            'message': f'已清除 [{target}] 模型缓存，下次请求时将重新加载权重并评估指标'
+        })
+    except Exception as e:
+        return jsonify({'code': 500, 'message': f'缓存清除失败: {str(e)}'})
