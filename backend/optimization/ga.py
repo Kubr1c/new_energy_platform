@@ -1,4 +1,6 @@
 import numpy as np
+from optimization.pso import PENALTY_COEFF
+
 
 class GA:
     def __init__(self, obj_func, constr_func, dim, bounds, 
@@ -15,22 +17,23 @@ class GA:
         self.crossover_rate = crossover_rate
         self.mutation_rate = mutation_rate
         
-    def evaluate(self, pop):
+    def evaluate(self, pop, weights):
         objs = np.array([self.obj_func(ind) for ind in pop])
         constrs = np.array([self.constr_func(ind) for ind in pop])
-        
-        # 权重分配 (同AWPSO一样)
-        weights = np.array([0.4, 0.3, 0.3])
         fitness = np.array([np.dot(ob, weights) for ob in objs])
-        # 约束硬惩罚机制
-        fitness += constrs * 100000 
-        
+        # 约束硬惩罚机制（使用统一惩罚系数）
+        fitness += constrs * PENALTY_COEFF
         return objs, constrs, fitness
-        
-    def optimize(self):
+
+    def optimize(self, weights=None):
+        """
+        weights: 长度为 3 的数组 [w_cost, w_abandon, w_life]，默认 [0.4, 0.3, 0.3]
+        """
+        weights = np.array(weights if weights is not None else [0.4, 0.3, 0.3], dtype=float)
+        weights = weights / (weights.sum() + 1e-12)
         # 初始化种群
         pop = np.random.uniform(self.bounds[0], self.bounds[1], (self.pop_size, self.dim))
-        objs, constrs, fitness = self.evaluate(pop)
+        objs, constrs, fitness = self.evaluate(pop, weights)
         
         # 记录全局最优
         gbest_idx = np.argmin(fitness)
@@ -74,7 +77,7 @@ class GA:
             pop = np.clip(new_pop, self.bounds[0], self.bounds[1])
             
             # 重新评估
-            objs, constrs, fitness = self.evaluate(pop)
+            objs, constrs, fitness = self.evaluate(pop, weights)
             
             # 更新全局最优
             current_best_idx = np.argmin(fitness)

@@ -194,7 +194,7 @@
     </el-row>
 
     <!-- 权重设置对话框 -->
-    <el-dialog v-model="weightDialogVisible" title="目标权重设置" width="400px">
+    <el-dialog v-model="weightDialogVisible" title="目标权重设置" width="420px">
       <el-form :model="weights" label-width="120px">
         <el-form-item label="运行成本">
           <el-slider v-model="weights.cost" :min="0" :max="1" :step="0.1" show-input />
@@ -219,17 +219,78 @@
         <el-button type="primary" @click="saveWeights">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 多目标优化结果对话框 -->
+    <el-dialog v-model="moDialogVisible" title="多目标优化 — 帕累托前沿" width="860px" top="5vh">
+      <div v-if="moResult">
+        <!-- 解选择 -->
+        <el-row :gutter="16" style="margin-bottom:16px">
+          <el-col :span="16">
+            <el-select v-model="selectedSolutionIdx" style="width:100%" @change="onSolutionChange">
+              <el-option
+                v-for="(s, i) in moResult.all_solutions"
+                :key="i"
+                :value="i"
+                :label="`${s.label}：成本 ${Math.round(s.objectives.cost)} 元 | 弃电率 ${(s.objectives.abandon_rate*100).toFixed(2)}% | 寿命损耗 ${s.objectives.life_loss.toFixed(5)}`"
+              />
+            </el-select>
+          </el-col>
+          <el-col :span="8">
+            <el-button type="primary" @click="applySelectedSolution">应用此方案</el-button>
+          </el-col>
+        </el-row>
+
+        <!-- 帕累托散点图（成本 vs 弃电率） -->
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <div style="font-weight:600;margin-bottom:8px">成本 vs 弃电率</div>
+            <v-chart class="mo-chart" :option="paretoChartCostAbandon" />
+          </el-col>
+          <el-col :span="12">
+            <div style="font-weight:600;margin-bottom:8px">成本 vs 寿命损耗</div>
+            <v-chart class="mo-chart" :option="paretoChartCostLife" />
+          </el-col>
+        </el-row>
+
+        <!-- 各解指标对比表 -->
+        <el-table :data="moResult.all_solutions" style="margin-top:16px" size="small">
+          <el-table-column label="方案" prop="label" width="100" />
+          <el-table-column label="运行成本(元)">
+            <template #default="scope">{{ Math.round(scope.row.objectives.cost) }}</template>
+          </el-table-column>
+          <el-table-column label="弃电率(%)">
+            <template #default="scope">{{ (scope.row.objectives.abandon_rate*100).toFixed(2) }}</template>
+          </el-table-column>
+          <el-table-column label="寿命损耗(次⁻¹)">
+            <template #default="scope">{{ scope.row.objectives.life_loss.toFixed(6) }}</template>
+          </el-table-column>
+          <el-table-column label="帕累托前沿" width="100">
+            <template #default="scope">
+              <el-tag :type="isParetoSolution(scope.row) ? 'success' : 'info'" size="small">
+                {{ isParetoSolution(scope.row) ? '非支配' : '支配' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <div v-else style="text-align:center;padding:40px;color:#909399">暂无多目标优化结果</div>
+
+      <template #footer>
+        <el-button @click="moDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart } from 'echarts/charts'
+import { LineChart, BarChart, ScatterChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 
-use([CanvasRenderer, LineChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent])
+use([CanvasRenderer, LineChart, BarChart, ScatterChart,
+     TitleComponent, TooltipComponent, LegendComponent, GridComponent])
 
 export default {
   name: 'Dispatch',
@@ -246,6 +307,9 @@ export default {
       lifeLoss: 0.0002,
       constraintViolation: 0,
       weightDialogVisible: false,
+      moDialogVisible: false,
+      moResult: null,
+      selectedSolutionIdx: 3,   // 默认选均衡方案（索引3）
       weights: {
         cost: 0.4,
         abandon: 0.3,
@@ -281,6 +345,60 @@ export default {
       if (this.abandonRate < 0.02) return '#67C23A'
       if (this.abandonRate < 0.05) return '#E6A23C'
       return '#F56C6C'
+    },
+    // 帕累托散点图：成本 vs 弃电率
+    paretoChartCostAbandon() {
+      if (!this.moResult) return {}
+      const all = this.moResult.all_solutions || []
+      const paretoSet = new Set((this.moResult.solutions || []).map(s => s.label))
+      const scatterData = all.map(s => ({
+        value: [
+          Math.round(s.objectives.cost),
+          parseFloat((s.objectives.abandon_rate * 100).toFixed(3))
+        ],
+        name: s.label,
+        itemStyle: { color: paretoSet.has(s.label) ? '#409EFF' : '#C0C4CC' },
+        symbolSize: paretoSet.has(s.label) ? 14 : 10
+      }))
+      return {
+        tooltip: {
+          formatter: p => `${p.name}<br/>成本: ${p.value[0]} 元<br/>弃电率: ${p.value[1]}%`
+        },
+        xAxis: { type: 'value', name: '成本(元)', nameLocation: 'end' },
+        yAxis: { type: 'value', name: '弃电率(%)', nameLocation: 'end' },
+        series: [{
+          type: 'scatter',
+          data: scatterData,
+          label: { show: true, formatter: p => p.name, position: 'top', fontSize: 11 }
+        }]
+      }
+    },
+    // 帕累托散点图：成本 vs 寿命损耗
+    paretoChartCostLife() {
+      if (!this.moResult) return {}
+      const all = this.moResult.all_solutions || []
+      const paretoSet = new Set((this.moResult.solutions || []).map(s => s.label))
+      const scatterData = all.map(s => ({
+        value: [
+          Math.round(s.objectives.cost),
+          parseFloat(s.objectives.life_loss.toFixed(6))
+        ],
+        name: s.label,
+        itemStyle: { color: paretoSet.has(s.label) ? '#67C23A' : '#C0C4CC' },
+        symbolSize: paretoSet.has(s.label) ? 14 : 10
+      }))
+      return {
+        tooltip: {
+          formatter: p => `${p.name}<br/>成本: ${p.value[0]} 元<br/>寿命损耗: ${p.value[1]}`
+        },
+        xAxis: { type: 'value', name: '成本(元)', nameLocation: 'end' },
+        yAxis: { type: 'value', name: '寿命损耗(次⁻¹)', nameLocation: 'end' },
+        series: [{
+          type: 'scatter',
+          data: scatterData,
+          label: { show: true, formatter: p => p.name, position: 'top', fontSize: 11 }
+        }]
+      }
     }
   },
   watch: {
@@ -304,16 +422,17 @@ export default {
           price_buy: Array.from({length: 24}, () => 0.5),
           price_sell: Array.from({length: 24}, () => 0.3),
           ess_params: this.essParams,
-          algorithm: this.algorithm
+          algorithm: this.algorithm,
+          weights: [this.weights.cost, this.weights.abandon, this.weights.life]
         })
         
         // 检查响应格式
         let responseData = null
-        if (response && response.code === 200) {
-          responseData = response.data
-        } else if (Array.isArray(response)) {
+        if (response && response.data && response.data.code === 200) {
+          responseData = response.data.data
+        } else if (Array.isArray(response.data)) {
           // 直接返回数组格式
-          responseData = response
+          responseData = response.data
         } else {
           console.error('优化调度API响应格式错误:', response)
           this.$message.error('优化调度失败：API响应格式错误')
@@ -346,12 +465,17 @@ export default {
           ess_params: this.essParams,
           algorithm: this.algorithm
         })
-        
-        if (response && response.code === 200) {
-          this.$message.success('多目标优化完成')
-          this.updateDispatchResults(response.data.best_solution)
+
+        if (response && response.data && response.data.code === 200) {
+          const d = response.data.data
+          this.moResult = d
+          this.selectedSolutionIdx = 3   // 默认选均衡方案
+          this.moDialogVisible = true
+          // 将综合最优解更新到主视图
+          this.updateDispatchResults(d.best_solution)
+          this.$message.success(`多目标优化完成，帕累托前沿共 ${(d.solutions || []).length} 个非支配解`)
         } else {
-          this.$message.error(response?.message || '多目标优化失败')
+          this.$message.error(response?.data?.message || '多目标优化失败')
         }
       } catch (error) {
         this.$message.error('多目标优化失败')
@@ -366,8 +490,8 @@ export default {
           params: { limit: 1, horizon: 24 }
         })
         
-        if (response && response.code === 200 && Array.isArray(response.data) && response.data.length > 0) {
-          const prediction = response.data[0]
+        if (response && response.data && response.data.code === 200 && Array.isArray(response.data.data) && response.data.data.length > 0) {
+          const prediction = response.data.data[0]
           return {
             wind_power: prediction.data.wind_power || Array.from({length: 24}, () => 0),
             pv_power: prediction.data.pv_power || Array.from({length: 24}, () => 0),
@@ -409,9 +533,9 @@ export default {
       try {
         const response = await this.$http.get('/api/data/latest')
         let latestData = null
-        if (Array.isArray(response)) {
-          latestData = response
-        } else if (response && response.code === 200 && Array.isArray(response.data)) {
+        if (response && response.data && response.data.code === 200 && Array.isArray(response.data.data)) {
+          latestData = response.data.data
+        } else if (Array.isArray(response.data)) {
           latestData = response.data
         }
 
@@ -446,11 +570,11 @@ export default {
           
           // 检查响应格式
           let latestData = null
-          if (response && response.code === 200 && Array.isArray(response.data)) {
-            latestData = response.data
-          } else if (Array.isArray(response)) {
+          if (response && response.data && response.data.code === 200 && Array.isArray(response.data.data)) {
+            latestData = response.data.data
+          } else if (Array.isArray(response.data)) {
             // 直接返回数组格式
-            latestData = response
+            latestData = response.data
           } else {
             console.error('最新数据API响应格式错误:', response)
             return
@@ -489,6 +613,26 @@ export default {
       }
       this.weightDialogVisible = false
       this.$message.success('权重设置成功')
+    },
+    // 多目标优化对话框：切换方案时更新图表预览
+    onSolutionChange(idx) {
+      if (!this.moResult || !this.moResult.all_solutions) return
+      const sol = this.moResult.all_solutions[idx]
+      if (sol) this.updateDispatchChart(sol)
+    },
+    // 将选中的方案应用到主视图
+    applySelectedSolution() {
+      if (!this.moResult || !this.moResult.all_solutions) return
+      const sol = this.moResult.all_solutions[this.selectedSolutionIdx]
+      if (!sol) return
+      this.updateDispatchResults(sol)
+      this.moDialogVisible = false
+      this.$message.success(`已应用方案：${sol.label}`)
+    },
+    // 判断某个解是否在帕累托前沿
+    isParetoSolution(sol) {
+      if (!this.moResult || !this.moResult.solutions) return false
+      return this.moResult.solutions.some(s => s.label === sol.label)
     },
     exportDispatchPlan() {
       if (!this.dispatchPlan || this.dispatchPlan.length === 0) {
@@ -607,6 +751,10 @@ export default {
 
 .chart {
   height: 400px;
+}
+
+.mo-chart {
+  height: 280px;
 }
 
 .optimization-metrics {

@@ -56,12 +56,15 @@ def exec_dispatch():
             if key not in forecasts or len(forecasts[key]) != 24:
                 return jsonify({'code': 400, 'message': f'预测数据格式错误，缺少{key}或长度不为24'})
         
-        # 获取储能参数及选择的优化算法
+        # 获取储能参数、选择的优化算法和目标权重
         ess_params = data.get('ess_params', {})
-        algorithm = data.get('algorithm', 'awpso')
-        
+        algorithm  = data.get('algorithm', 'awpso')
+        weights    = data.get('weights', None)   # [w_cost, w_abandon, w_life]
+
         # 调用优化求解器
-        result = solve_dispatch(forecasts, price_buy, price_sell, ess_params, dr_ratio=dr_ratio, algorithm=algorithm)
+        result = solve_dispatch(forecasts, price_buy, price_sell,
+                                ess_params, dr_ratio=dr_ratio,
+                                algorithm=algorithm, weights=weights)
         
         # 存入数据库
         dispatch_record = DispatchResult(
@@ -143,16 +146,19 @@ def exec_multi_objective_dispatch():
             if key not in forecasts or len(forecasts[key]) != 24:
                 return jsonify({'code': 400, 'message': f'预测数据格式错误，缺少{key}或长度不为24'})
         
-        # 获取储能参数及选择的优化算法
+        # 获取储能参数和选择的优化算法
         ess_params = data.get('ess_params', {})
-        algorithm = data.get('algorithm', 'awpso')
-        
-        # 调用多目标优化求解器
-        solutions = solve_dispatch_multi_objective(forecasts, price_buy, price_sell, ess_params, dr_ratio=dr_ratio, algorithm=algorithm)
-        
-        # 存储所有解到数据库（选择最优解）
-        best_solution = solutions[0]  # 简化：选择第一个解
-        
+        algorithm  = data.get('algorithm', 'awpso')
+
+        # 调用多目标优化求解器（真实传入不同权重，返回帕累托前沿）
+        mo_result = solve_dispatch_multi_objective(
+            forecasts, price_buy, price_sell,
+            ess_params, dr_ratio=dr_ratio, algorithm=algorithm
+        )
+
+        best_solution = mo_result['best_solution']
+
+        # 存储综合最优解到数据库
         dispatch_record = DispatchResult(
             schedule_date=start_date.date(),
             charge_plan=best_solution['charge_plan'],
@@ -163,14 +169,21 @@ def exec_multi_objective_dispatch():
         )
         db.session.add(dispatch_record)
         db.session.commit()
-        
+
         return jsonify({
-            'code': 200, 
+            'code': 200,
             'data': {
-                'dispatch_id': dispatch_record.id,
-                'schedule_date': start_date.date().isoformat(),
-                'solutions': solutions,
-                'best_solution': best_solution
+                'dispatch_id':       dispatch_record.id,
+                'schedule_date':     start_date.date().isoformat(),
+                # 帕累托前沿（非支配解集）
+                'solutions':         mo_result['solutions'],
+                # 全部 4 个解（含被支配解，便于前端完整展示）
+                'all_solutions':     mo_result['all_solutions'],
+                # 综合最优解（均衡权重下最佳）
+                'best_solution':     best_solution,
+                # 帕累托目标坐标，便于前端绘制散点图
+                'pareto_objectives': mo_result['pareto_objectives'],
+                'weight_labels':     mo_result['weight_labels'],
             }
         })
         
