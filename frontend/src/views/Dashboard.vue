@@ -11,11 +11,24 @@
             <div class="card-info">
               <h3>{{ card.value }}</h3>
               <p>{{ card.title }}</p>
+              <small v-if="dataMode === 'history' && dataDate" style="color:#E6A23C;font-size:11px;">
+                历史数据 {{ dataDate }}
+              </small>
             </div>
           </div>
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 历史回放模式提示条 -->
+    <el-alert
+      v-if="dataMode === 'history'"
+      :title="`历史回放模式：当前展示的是 ${dataDate} 的数据（数据库无近7天记录）`"
+      type="warning"
+      show-icon
+      :closable="false"
+      style="margin-top: 16px; margin-bottom: 0;"
+    />
 
     <el-row :gutter="20" style="margin-top: 20px;">
       <!-- 实时功率曲线 -->
@@ -23,7 +36,7 @@
         <el-card title="实时功率曲线">
           <template #header>
             <div class="card-header">
-              <span>实时功率曲线</span>
+              <span>{{ dataMode === 'history' ? `功率曲线（${dataDate}）` : '实时功率曲线' }}</span>
               <el-button type="text" @click="refreshPowerData">
                 <el-icon><Refresh /></el-icon>
               </el-button>
@@ -166,7 +179,9 @@ export default {
         { name: '数据库', value: '正常', icon: 'Coin', color: '#67C23A', tagType: 'success' },
         { name: 'API服务', value: '正常', icon: 'Connection', color: '#67C23A', tagType: 'success' }
       ],
-      recentDispatches: []
+      recentDispatches: [],
+      dataMode: 'realtime',   // 'realtime' | 'history'
+      dataDate: null          // 历史回放时显示的日期字符串
     }
   },
   mounted() {
@@ -254,10 +269,11 @@ export default {
         let data = null
         if (Array.isArray(response.data)) {
           data = response.data
-          console.log('最新数据API直接返回数组格式')
         } else if (response.data && response.data.code === 200) {
           data = response.data.data
-          console.log('最新数据API返回包装格式')
+          // 双模式：读取 mode 和 data_date 字段
+          this.dataMode = response.data.mode || 'realtime'
+          this.dataDate = response.data.data_date || null
         } else {
           console.error('API响应格式错误:', response.data)
           this.$message.error('数据加载失败：响应格式错误')
