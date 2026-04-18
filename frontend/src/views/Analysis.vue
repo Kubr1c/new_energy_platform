@@ -171,12 +171,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick, shallowRef, onBeforeUnmount } from 'vue'
+import { ref, reactive, onMounted, nextTick, shallowRef, onBeforeUnmount, getCurrentInstance } from 'vue'
 import { DataAnalysis, VideoPlay, Aim, DataLine, TrendCharts, Share, Cpu, Money, Timer } from '@element-plus/icons-vue'
-import axios from 'axios'
 import * as echarts from 'echarts'
 
 const activeTab = ref('model')
+
+// 使用全局 $http（已配置 baseURL=http://localhost:5000 和拦截器）
+// 不用本地 import axios，否则没有 baseURL，请求会打到前端 dev server 端口
+const { proxy } = getCurrentInstance()
+const $http = proxy.$http
 
 // ----------------- Model Comparison -----------------
 const selectedModels = ref(['attention_lstm', 'cnn_lstm', 'standard_lstm'])
@@ -204,24 +208,37 @@ const runModelComparison = async () => {
   if (selectedModels.value.length === 0) return
   modelLoading.value = true
   try {
-    const res = await axios.post('/api/analysis/model_compare', {
+    const res = await $http.post('/api/analysis/model_compare', {
       models: selectedModels.value
     })
     if (res.data && res.data.code === 200) {
       const payload = res.data.data
       // 新接口返回 { results: {...}, ground_truth: {...} }
-      if (payload.results) {
-        modelData.results  = payload.results
-        groundTruth.value  = payload.ground_truth || null
-      } else {
-        // 兼容旧接口（直接返回 results map）
-        modelData.results  = payload
-        groundTruth.value  = null
+      if (payload && payload.results) {
+        modelData.results = payload.results
+        // 严格验证 ground_truth 包含有效数据再赋值
+        const gt = payload.ground_truth
+        if (gt && Array.isArray(gt.wind_power) && gt.wind_power.length > 0) {
+          groundTruth.value = gt
+          console.log('[Analysis] ground_truth loaded:', gt.timestamps?.slice(0,3), gt.wind_power?.slice(0,3))
+        } else {
+          groundTruth.value = null
+          console.warn('[Analysis] ground_truth missing or empty in response:', gt)
+        }
+      } else if (payload) {
+        // 兼容旧接口
+        modelData.results = payload
+        groundTruth.value = null
+        console.warn('[Analysis] old API format, no ground_truth')
       }
       processModelMetrics()
       await nextTick()
       renderRadarChart()
       renderWindLineChart()
+      // 调试：打印渲染时的状态
+      console.log('[Analysis] renderWindLineChart called, groundTruth.value =', groundTruth.value ? 'HAS DATA' : 'NULL')
+    } else {
+      console.error('[Analysis] API error:', res.data)
     }
   } catch (err) {
     console.error('模型比较提取失败:', err)
@@ -455,7 +472,7 @@ const runAlgorithmComparison = async () => {
   if (selectedAlgos.value.length === 0) return
   algoLoading.value = true
   try {
-    const res = await axios.post('/api/analysis/algorithm_compare', {
+    const res = await $http.post('/api/analysis/algorithm_compare', {
       algorithms: selectedAlgos.value
     })
     if (res.data && res.data.code === 200) {
