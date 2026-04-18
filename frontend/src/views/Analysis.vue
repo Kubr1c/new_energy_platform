@@ -79,7 +79,7 @@
             <div class="card-header">
               <h4>
                 <el-icon><TrendCharts /></el-icon>
-                未来24小时风力发电功率预测序列叠加比对
+                风力发电功率预测 vs 真实值对比（测试集 2023-11-07 起，24步）
               </h4>
             </div>
             <div class="card-body">
@@ -198,6 +198,8 @@ const windLineChartRef = ref(null)
 let radarChart = null
 let windLineChart = null
 
+const groundTruth = ref(null)   // 真实值序列（所有模型共用）
+
 const runModelComparison = async () => {
   if (selectedModels.value.length === 0) return
   modelLoading.value = true
@@ -206,7 +208,16 @@ const runModelComparison = async () => {
       models: selectedModels.value
     })
     if (res.data && res.data.code === 200) {
-      modelData.results = res.data.data
+      const payload = res.data.data
+      // 新接口返回 { results: {...}, ground_truth: {...} }
+      if (payload.results) {
+        modelData.results  = payload.results
+        groundTruth.value  = payload.ground_truth || null
+      } else {
+        // 兼容旧接口（直接返回 results map）
+        modelData.results  = payload
+        groundTruth.value  = null
+      }
       processModelMetrics()
       await nextTick()
       renderRadarChart()
@@ -310,34 +321,90 @@ const renderWindLineChart = () => {
   if (!windLineChartRef.value) return
   if (!windLineChart) windLineChart = echarts.init(windLineChartRef.value)
 
-  const hours = Array.from({length: 24}, (_, i) => `${i}:00`)
+  // X 轴：优先使用真实时间戳标签，回退到 0:00~23:00
+  const xLabels = (groundTruth.value && groundTruth.value.timestamps)
+    ? groundTruth.value.timestamps
+    : Array.from({length: 24}, (_, i) => `${i}:00`)
+
+  const modelColors = ['#00f2fe', '#fbc2eb', '#f6d365', '#a18cd1', '#ff9a9e']
   const seriesData = []
-  
-  Object.entries(modelData.results).forEach(([mName, mData]) => {
+
+  // ---- 真实值曲线（最突出，放在所有模型曲线之后，视觉上置于顶层）----
+  if (groundTruth.value && groundTruth.value.wind_power) {
     seriesData.push({
-      name: getModelLabel(mName),
+      name: '真实值',
+      type: 'line',
+      smooth: false,
+      symbol: 'circle',
+      symbolSize: 5,
+      data: groundTruth.value.wind_power,
+      lineStyle: { width: 3, color: '#ffffff', type: 'dashed' },
+      itemStyle: { color: '#ffffff' },
+      zlevel: 10,
+      z: 10,
+      emphasis: { focus: 'series' }
+    })
+  }
+
+  // ---- 各模型预测曲线 ----
+  Object.entries(modelData.results).forEach(([mName, mData], idx) => {
+    const color = modelColors[idx % modelColors.length]
+    // 计算该模型在这 24 步上的简单 MAE（与真实值配对）
+    let stepMae = null
+    if (groundTruth.value && groundTruth.value.wind_power && mData.predictions.wind_power) {
+      const preds   = mData.predictions.wind_power
+      const actuals = groundTruth.value.wind_power
+      const n = Math.min(preds.length, actuals.length)
+      if (n > 0) {
+        stepMae = (preds.slice(0, n).reduce(
+          (sum, p, i) => sum + Math.abs(p - actuals[i]), 0
+        ) / n).toFixed(2)
+      }
+    }
+    const label = getModelLabel(mName)
+    const seriesName = stepMae !== null ? `${label} (MAE=${stepMae})` : label
+
+    seriesData.push({
+      name: seriesName,
       type: 'line',
       smooth: true,
       symbol: 'none',
       data: mData.predictions.wind_power,
-      lineStyle: { width: 3 },
+      lineStyle: { width: 2.5, color },
+      itemStyle: { color },
       emphasis: { focus: 'series' }
     })
   })
 
   const option = {
     backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis' },
-    legend: {
-      textStyle: { color: '#aab2cd' },
-      top: 10
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params) => {
+        let html = `<div style="font-size:12px"><b>${params[0].axisValue}</b><br/>`
+        params.forEach(p => {
+          const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:5px"></span>`
+          html += `${dot}${p.seriesName}: <b>${p.value !== undefined ? Number(p.value).toFixed(2) : '--'} MW</b><br/>`
+        })
+        html += '</div>'
+        return html
+      }
     },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    legend: {
+      textStyle: { color: '#aab2cd', fontSize: 11 },
+      top: 8,
+      icon: 'roundRect'
+    },
+    grid: { left: '3%', right: '4%', bottom: '8%', top: '15%', containLabel: true },
     xAxis: {
       type: 'category',
       boundaryGap: false,
-      data: hours,
-      axisLabel: { color: '#aab2cd' },
+      data: xLabels,
+      axisLabel: {
+        color: '#aab2cd',
+        fontSize: 10,
+        rotate: xLabels.some(l => l.includes('-')) ? 30 : 0  // 有日期时旋转
+      },
       axisLine: { lineStyle: { color: '#3d4465' } }
     },
     yAxis: {
