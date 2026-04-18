@@ -1,5 +1,19 @@
 # 新能源储能电池寿命预测算法平台
 
+OpenCode 初始化与运行
+- 项目已包含一个 Windows 友好的初始化与运行脚本集合，方便在本地快速启动开发环境。
+- 主要文件：
+  - tools/opencode_init.bat — 创建/激活虚拟环境、安装依赖、初始化数据库
+  - tools/opencode_run.bat — 启动后端服务（需要已初始化的虚拟环境）
+- 使用步骤（Windows）
+  1) 使用 OpenCode 进行环境初始化
+     - 运行：`tools\opencode_init.bat`
+  2) 启动后端服务
+     - 运行：`tools\opencode_run.bat`
+  3) 前端通常在 https://localhost:8080  需要单独在前端目录执行 `npm install` 与 `npm run serve`。
+
+注：后端的配置（数据库连接等）可通过 backend/.env.example 参考，实际部署请复制为 backend/.env 并填入真实信息，确保配置与本地数据库匹配。
+
 该项目是一个基于深度学习的新能源储能电池管理与优化调度系统。
 
 ## 项目结构
