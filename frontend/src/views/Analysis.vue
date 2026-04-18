@@ -229,7 +229,7 @@ const availableModels = [
 
 // 曲线对比控制
 const compareMode   = ref('realtime')   // 'realtime' | 'testset'
-const compareTarget = ref('wind_power') // 'wind_power' | 'pv_power' | 'load'
+const compareTarget = ref('load')       // 默认显示负荷，最直观反映真实需求侧数据
 const contextInfo   = ref('')           // 上下文时间段说明
 const currentMode   = ref('realtime')  // 后端实际使用的模式（可能因数据不足降级）
 
@@ -241,6 +241,10 @@ const targetLabelMap = {
 
 const chartTitle = computed(() => {
   const target = targetLabelMap[compareTarget.value] || compareTarget.value
+  const dateStr = groundTruth.value?.date_label || ''
+  if (currentMode.value === 'realtime' && dateStr) {
+    return `${target} 预测 vs 真实值对比（${dateStr}，实时数据，24步）`
+  }
   const modeStr = currentMode.value === 'realtime' ? '最新实时数据' : '历史测试集 2023-11-07'
   return `${target} 预测 vs 真实值对比（${modeStr}，24步）`
 })
@@ -273,10 +277,19 @@ const runModelComparison = async () => {
         contextInfo.value  = payload.context_info || ''
 
         const gt = payload.ground_truth
-        if (gt && Array.isArray(gt.wind_power) && gt.wind_power.length > 0) {
+        // 检查任意一个目标变量有数据即视为有效
+        const hasData = gt && (
+          (Array.isArray(gt.load) && gt.load.length > 0) ||
+          (Array.isArray(gt.wind_power) && gt.wind_power.length > 0)
+        )
+        if (hasData) {
           groundTruth.value = gt
+          console.log('[Analysis] ground_truth set, load[:3]=',
+            gt.load?.slice(0,3), 'wind[:3]=', gt.wind_power?.slice(0,3),
+            'timestamps[:2]=', gt.timestamps?.slice(0,2))
         } else {
           groundTruth.value = null
+          console.warn('[Analysis] ground_truth missing or empty:', gt)
         }
       } else if (payload) {
         modelData.results = payload
@@ -393,12 +406,22 @@ const renderWindLineChart = () => {
 
   const target = compareTarget.value   // 'wind_power' | 'pv_power' | 'load'
   const targetLabel = targetLabelMap[target] || target
-  const unit = target === 'load' ? 'MW（负荷）' : 'MW'
+  const unitMap = { wind_power: 'MW', pv_power: 'MW', load: 'MW（负荷）' }
+  const unit = unitMap[target] || 'MW'
 
-  // X 轴：真实时间戳 or 0:00~23:00
-  const xLabels = (groundTruth.value?.timestamps?.length > 0)
-    ? groundTruth.value.timestamps
+  // X 轴：优先使用真实时间戳（含年月日），回退到小时序列
+  const rawLabels = groundTruth.value?.timestamps
+  const hasTimestamps = Array.isArray(rawLabels) && rawLabels.length > 0
+  // 格式化：若包含年份（如 2026-05-20 00:00），只保留 MM-DD HH:MM 展示在轴上
+  // 完整日期用于 tooltip，轴上显示精简版避免过密
+  const xLabels = hasTimestamps
+    ? rawLabels.map(t => {
+        // 输入格式: '2026-05-20 00:00' → 显示 '05-20 00:00'
+        return t.length >= 16 ? t.slice(5) : t
+      })
     : Array.from({length: 24}, (_, i) => `${i}:00`)
+  // 完整标签用于 tooltip 和标题说明
+  const fullLabels = hasTimestamps ? rawLabels : xLabels
 
   const modelColors = ['#00cfff', '#ff6b6b', '#ffd166', '#06d6a0', '#c77dff']
   const seriesData = []
@@ -451,6 +474,10 @@ const renderWindLineChart = () => {
     })
   })
 
+  // 日期标签用于图例标题区显示
+  const dateLabel = groundTruth.value?.date_label || ''
+  const dateSuffix = dateLabel ? `  ${dateLabel}` : ''
+
   const option = {
     backgroundColor: '#0d1b2a',
     tooltip: {
@@ -460,7 +487,10 @@ const renderWindLineChart = () => {
       borderWidth: 1,
       textStyle: { color: '#e8f4fd', fontSize: 12 },
       formatter: (params) => {
-        let html = `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#7ecfff">${params[0]?.axisValue}</div>`
+        // 取完整时间标签作为 tooltip 标题
+        const idx = params[0]?.dataIndex ?? 0
+        const fullTime = fullLabels[idx] || params[0]?.axisValue || ''
+        let html = `<div style="font-size:13px;font-weight:600;margin-bottom:6px;color:#7ecfff">${fullTime}</div>`
         params.forEach(p => {
           const isReal = p.seriesName.includes('真实值')
           const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:6px;${isReal ? 'border:2px solid #fff' : ''}"></span>`
@@ -474,14 +504,24 @@ const renderWindLineChart = () => {
       textStyle: { color: '#d0e8ff', fontSize: 12, fontWeight: '500' },
       top: 8, icon: 'roundRect', itemWidth: 20, itemHeight: 4, itemGap: 16
     },
-    grid: { left: '4%', right: '3%', bottom: '12%', top: '14%', containLabel: true },
+    // 标题副标题显示日期
+    title: dateLabel ? [{
+      text: '',
+      subtext: `预测日期: ${dateLabel}`,
+      subtextStyle: { color: '#56d4ff', fontSize: 11 },
+      right: 12,
+      top: 6
+    }] : [],
+    grid: { left: '4%', right: '3%', bottom: '14%', top: '16%', containLabel: true },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: xLabels,
       axisLabel: {
-        color: '#8ab4d4', fontSize: 11,
-        rotate: xLabels.some(l => l.includes('-')) ? 35 : 0
+        color: '#8ab4d4',
+        fontSize: 10,
+        rotate: 35,         // 始终旋转，避免 MM-DD HH:MM 标签重叠
+        interval: 1         // 每隔一个显示一个，避免过密
       },
       axisLine: { lineStyle: { color: '#1e3a5f', width: 1.5 } },
       splitLine: { show: false }

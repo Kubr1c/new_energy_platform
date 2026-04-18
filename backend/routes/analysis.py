@@ -71,8 +71,11 @@ def _get_realtime_ground_truth_and_context(n_context=24, n_future=24):
         'wind_power': [round(float(r.wind_power or 0), 3) for r in future_rows],
         'pv_power':   [round(float(r.pv_power   or 0), 3) for r in future_rows],
         'load':       [round(float(r.load        or 0), 3) for r in future_rows],
-        'timestamps': [r.timestamp.strftime('%m-%d %H:%M') for r in future_rows],
+        # 包含完整年月日时分，前端 X 轴直接展示
+        'timestamps': [r.timestamp.strftime('%Y-%m-%d %H:%M') for r in future_rows],
         'context_end': ctx_rows[-1].timestamp.strftime('%Y-%m-%d %H:%M'),
+        # 方便前端展示的简短日期标签
+        'date_label': future_rows[0].timestamp.strftime('%Y-%m-%d'),
     }
 
     return {'context': ctx_df, 'ground_truth': ground_truth, 'mode': 'realtime'}
@@ -134,7 +137,8 @@ def _get_testset_ground_truth(n_steps=24):
         'wind_power': [round(float(r.wind_power or 0), 3) for r in rows],
         'pv_power':   [round(float(r.pv_power   or 0), 3) for r in rows],
         'load':       [round(float(r.load        or 0), 3) for r in rows],
-        'timestamps': [r.timestamp.strftime('%m-%d %H:%M') for r in rows],
+        'timestamps': [r.timestamp.strftime('%Y-%m-%d %H:%M') for r in rows],
+        'date_label': rows[0].timestamp.strftime('%Y-%m-%d'),
     }
 
 
