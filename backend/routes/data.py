@@ -201,3 +201,60 @@ def get_statistics():
         
     except Exception as e:
         return jsonify({'code': 500, 'message': f'统计错误: {str(e)}'})
+
+
+@data_bp.route('/api/data/dataset_date', methods=['GET'])
+def get_dataset_date():
+    """
+    返回数据集中的最新日期信息，供前端替代 new Date() 使用。
+
+    返回：
+      latest_date      : 数据集最新记录的日期字符串 (YYYY-MM-DD)
+      latest_datetime  : 数据集最新记录的完整时间 (ISO 格式)
+      latest_hour      : 最新记录的小时数 (0-23)，供 SOC 曲线索引使用
+      earliest_date    : 数据集最早记录的日期字符串 (YYYY-MM-DD)
+      dispatch_default : 建议用于调度日期选择器的默认日期 (YYYY-MM-DD)
+                         取数据集内最后一个完整天（即最新日期往前一天，
+                         确保那一天有 24 条完整的小时级数据）
+    """
+    try:
+        latest = NewEnergyData.query.order_by(
+            NewEnergyData.timestamp.desc()
+        ).first()
+
+        earliest = NewEnergyData.query.order_by(
+            NewEnergyData.timestamp.asc()
+        ).first()
+
+        if not latest:
+            return jsonify({'code': 404, 'message': '数据库中没有数据'})
+
+        latest_date = latest.timestamp.date()
+        latest_hour = latest.timestamp.hour
+
+        # 调度默认日期：取最新日期当天，若当天数据不足24条则退一天
+        day_count = NewEnergyData.query.filter(
+            db.func.date(NewEnergyData.timestamp) == latest_date
+        ).count()
+
+        if day_count >= 24:
+            dispatch_default = latest_date.isoformat()
+        else:
+            # 退到前一天
+            from datetime import timedelta
+            prev_day = latest_date - timedelta(days=1)
+            dispatch_default = prev_day.isoformat()
+
+        return jsonify({
+            'code': 200,
+            'data': {
+                'latest_date':     latest_date.isoformat(),
+                'latest_datetime': latest.timestamp.isoformat(),
+                'latest_hour':     latest_hour,
+                'earliest_date':   earliest.timestamp.date().isoformat(),
+                'dispatch_default': dispatch_default,
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 500, 'message': f'获取数据集日期失败: {str(e)}'})

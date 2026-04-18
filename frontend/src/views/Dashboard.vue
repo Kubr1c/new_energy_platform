@@ -166,10 +166,22 @@ export default {
         { name: '数据库', value: '正常', icon: 'Coin', color: '#67C23A', tagType: 'success' },
         { name: 'API服务', value: '正常', icon: 'Connection', color: '#67C23A', tagType: 'success' }
       ],
-      recentDispatches: []
+      recentDispatches: [],
+      // 数据集最新记录的小时（由 mounted 从 /api/data/dataset_date 获取）
+      // 用于替代 new Date().getHours()，确保 SOC 索引与数据集时间对齐
+      datasetHour: 6
     }
   },
-  mounted() {
+  async mounted() {
+    // 先获取数据集时间，再加载依赖时间的组件
+    try {
+      const res = await this.$http.get('/api/data/dataset_date')
+      if (res.data && res.data.code === 200) {
+        this.datasetHour = res.data.data.latest_hour
+      }
+    } catch (e) {
+      // 接口失败时保持默认值 6
+    }
     this.loadLatestData()
     this.loadRecentDispatches()
     this.loadPredictions()
@@ -226,18 +238,19 @@ export default {
       const socCurve = Array.isArray(record.soc_curve) ? record.soc_curve : []
       const chargePlan = Array.isArray(record.charge_plan) ? record.charge_plan : []
       const dischargePlan = Array.isArray(record.discharge_plan) ? record.discharge_plan : []
-      const currentHour = new Date().getHours()
+      // 使用数据集最新记录的小时，而非系统当前时间
+      const datasetHour = this.datasetHour
 
       if (socCurve.length > 0) {
-        const socRaw = socCurve[currentHour] ?? socCurve[socCurve.length - 1]
+        const socRaw = socCurve[datasetHour] ?? socCurve[socCurve.length - 1]
         this.socValue = Number(this.normalizeSocPercent(socRaw).toFixed(1))
       }
       if (chargePlan.length > 0) {
-        const chargeRaw = chargePlan[currentHour] ?? chargePlan[chargePlan.length - 1]
+        const chargeRaw = chargePlan[datasetHour] ?? chargePlan[chargePlan.length - 1]
         this.chargePower = Number(this.toNumber(chargeRaw, 0).toFixed(2))
       }
       if (dischargePlan.length > 0) {
-        const dischargeRaw = dischargePlan[currentHour] ?? dischargePlan[dischargePlan.length - 1]
+        const dischargeRaw = dischargePlan[datasetHour] ?? dischargePlan[dischargePlan.length - 1]
         this.dischargePower = Number(this.toNumber(dischargeRaw, 0).toFixed(2))
       }
     },

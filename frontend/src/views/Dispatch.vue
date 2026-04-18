@@ -297,7 +297,7 @@ export default {
   components: { VChart },
   data() {
     return {
-      dispatchDate: new Date().toISOString().split('T')[0],
+      dispatchDate: '',   // 由 mounted() 从数据集最新日期动态设置，避免使用系统当前日期
       algorithm: 'awpso',
       dispatchLoading: false,
       multiLoading: false,
@@ -406,8 +406,17 @@ export default {
       this.updateDispatchChart(this.latestDispatchResult || {})
     }
   },
-  mounted() {
-    // 初始状态为空，等待执行优化调度
+  async mounted() {
+    // 从数据集中获取最新日期作为默认调度日期，避免使用系统当前日期
+    try {
+      const res = await this.$http.get('/api/data/dataset_date')
+      if (res.data && res.data.code === 200) {
+        this.dispatchDate = res.data.data.dispatch_default
+      }
+    } catch (e) {
+      // 接口失败时降级到数据集已知最新日期
+      this.dispatchDate = '2026-04-10'
+    }
   },
   methods: {
     async runDispatch() {
