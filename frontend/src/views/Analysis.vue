@@ -26,6 +26,33 @@
                 {{ model.label }}
               </el-checkbox>
             </el-checkbox-group>
+
+            <!-- 曲线对比控制栏 -->
+            <div class="chart-controls">
+              <div class="control-group">
+                <span class="control-label">数据模式</span>
+                <el-radio-group v-model="compareMode" size="small" @change="runModelComparison">
+                  <el-radio-button label="realtime">
+                    <el-icon style="margin-right:4px"><VideoPlay /></el-icon>实时数据
+                  </el-radio-button>
+                  <el-radio-button label="testset">
+                    <el-icon style="margin-right:4px"><DataLine /></el-icon>历史测试集
+                  </el-radio-button>
+                </el-radio-group>
+              </div>
+              <div class="control-group">
+                <span class="control-label">对比变量</span>
+                <el-radio-group v-model="compareTarget" size="small" @change="renderWindLineChart">
+                  <el-radio-button label="wind_power">风电功率</el-radio-button>
+                  <el-radio-button label="pv_power">光伏功率</el-radio-button>
+                  <el-radio-button label="load">系统负荷</el-radio-button>
+                </el-radio-group>
+              </div>
+              <div class="context-info" v-if="contextInfo">
+                <el-icon style="color:#56d4ff;margin-right:4px"><InfoFilled /></el-icon>
+                <span>{{ contextInfo }}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -74,13 +101,22 @@
             </div>
           </div>
 
-          <!-- 风电预测拟合曲线 -->
+          <!-- 预测 vs 真实值对比曲线 -->
           <div class="chart-card full-width">
             <div class="card-header">
               <h4>
                 <el-icon><TrendCharts /></el-icon>
-                风力发电功率预测 vs 真实值对比（测试集 2023-11-07 起，24步）
+                {{ chartTitle }}
               </h4>
+              <!-- 模式标签 -->
+              <el-tag
+                :type="compareMode === 'realtime' ? 'success' : 'info'"
+                size="small"
+                effect="dark"
+                style="margin-left:12px"
+              >
+                {{ compareMode === 'realtime' ? '实时数据对比' : '历史测试集对比' }}
+              </el-tag>
             </div>
             <div class="card-body">
               <div ref="windLineChartRef" class="chart-container extended-height"></div>
@@ -171,14 +207,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick, shallowRef, onBeforeUnmount, getCurrentInstance } from 'vue'
-import { DataAnalysis, VideoPlay, Aim, DataLine, TrendCharts, Share, Cpu, Money, Timer } from '@element-plus/icons-vue'
+import { ref, reactive, computed, onMounted, nextTick, shallowRef, onBeforeUnmount, getCurrentInstance } from 'vue'
+import { DataAnalysis, VideoPlay, Aim, DataLine, TrendCharts, Share, Cpu, Money, Timer, InfoFilled } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 
 const activeTab = ref('model')
 
 // 使用全局 $http（已配置 baseURL=http://localhost:5000 和拦截器）
-// 不用本地 import axios，否则没有 baseURL，请求会打到前端 dev server 端口
 const { proxy } = getCurrentInstance()
 const $http = proxy.$http
 
@@ -191,6 +226,24 @@ const availableModels = [
   { label: 'GRU (门控循环替代)', value: 'gru' },
   { label: 'Transformer (纯注意力焦点)', value: 'transformer' }
 ]
+
+// 曲线对比控制
+const compareMode   = ref('realtime')   // 'realtime' | 'testset'
+const compareTarget = ref('wind_power') // 'wind_power' | 'pv_power' | 'load'
+const contextInfo   = ref('')           // 上下文时间段说明
+const currentMode   = ref('realtime')  // 后端实际使用的模式（可能因数据不足降级）
+
+const targetLabelMap = {
+  wind_power: '风力发电功率',
+  pv_power:   '光伏发电功率',
+  load:       '系统负荷',
+}
+
+const chartTitle = computed(() => {
+  const target = targetLabelMap[compareTarget.value] || compareTarget.value
+  const modeStr = currentMode.value === 'realtime' ? '最新实时数据' : '历史测试集 2023-11-07'
+  return `${target} 预测 vs 真实值对比（${modeStr}，24步）`
+})
 
 const modelLoading = ref(false)
 const modelData = reactive({ results: {} })
@@ -209,34 +262,30 @@ const runModelComparison = async () => {
   modelLoading.value = true
   try {
     const res = await $http.post('/api/analysis/model_compare', {
-      models: selectedModels.value
+      models: selectedModels.value,
+      mode:   compareMode.value      // 发送当前选择的模式
     })
     if (res.data && res.data.code === 200) {
       const payload = res.data.data
-      // 新接口返回 { results: {...}, ground_truth: {...} }
       if (payload && payload.results) {
-        modelData.results = payload.results
-        // 严格验证 ground_truth 包含有效数据再赋值
+        modelData.results  = payload.results
+        currentMode.value  = payload.mode || compareMode.value
+        contextInfo.value  = payload.context_info || ''
+
         const gt = payload.ground_truth
         if (gt && Array.isArray(gt.wind_power) && gt.wind_power.length > 0) {
           groundTruth.value = gt
-          console.log('[Analysis] ground_truth loaded:', gt.timestamps?.slice(0,3), gt.wind_power?.slice(0,3))
         } else {
           groundTruth.value = null
-          console.warn('[Analysis] ground_truth missing or empty in response:', gt)
         }
       } else if (payload) {
-        // 兼容旧接口
         modelData.results = payload
         groundTruth.value = null
-        console.warn('[Analysis] old API format, no ground_truth')
       }
       processModelMetrics()
       await nextTick()
       renderRadarChart()
       renderWindLineChart()
-      // 调试：打印渲染时的状态
-      console.log('[Analysis] renderWindLineChart called, groundTruth.value =', groundTruth.value ? 'HAS DATA' : 'NULL')
     } else {
       console.error('[Analysis] API error:', res.data)
     }
@@ -338,34 +387,35 @@ const renderRadarChart = () => {
 const renderWindLineChart = () => {
   if (!windLineChartRef.value) return
 
-  // 每次渲染前销毁旧实例，确保 series 列表完整替换（避免 merge 模式遗留旧系列）
-  if (windLineChart) {
-    windLineChart.dispose()
-    windLineChart = null
-  }
+  // 每次销毁重建，防止 ECharts merge 模式残留旧 series
+  if (windLineChart) { windLineChart.dispose(); windLineChart = null }
   windLineChart = echarts.init(windLineChartRef.value)
 
-  // X 轴：优先使用真实时间戳，回退到 0:00~23:00
-  const xLabels = (groundTruth.value && groundTruth.value.timestamps && groundTruth.value.timestamps.length > 0)
+  const target = compareTarget.value   // 'wind_power' | 'pv_power' | 'load'
+  const targetLabel = targetLabelMap[target] || target
+  const unit = target === 'load' ? 'MW（负荷）' : 'MW'
+
+  // X 轴：真实时间戳 or 0:00~23:00
+  const xLabels = (groundTruth.value?.timestamps?.length > 0)
     ? groundTruth.value.timestamps
     : Array.from({length: 24}, (_, i) => `${i}:00`)
 
-  // 高饱和度模型配色
   const modelColors = ['#00cfff', '#ff6b6b', '#ffd166', '#06d6a0', '#c77dff']
   const seriesData = []
 
-  // ---- 真实值曲线（白色实线 + 圆点，最粗最突出）----
+  // ---- 真实值曲线（白色实线 + 圆点）----
   const gt = groundTruth.value
-  if (gt && Array.isArray(gt.wind_power) && gt.wind_power.length > 0) {
+  const gtData = gt?.[target]
+  if (Array.isArray(gtData) && gtData.length > 0) {
     seriesData.push({
       name: '■ 真实值',
       type: 'line',
       smooth: false,
       symbol: 'circle',
       symbolSize: 6,
-      data: gt.wind_power,
+      data: gtData,
       lineStyle: { width: 3.5, color: '#ffffff' },
-      itemStyle: { color: '#ffffff', borderWidth: 2, borderColor: '#ffffff' },
+      itemStyle: { color: '#ffffff' },
       z: 100,
       emphasis: { focus: 'series', lineStyle: { width: 5 } }
     })
@@ -373,19 +423,19 @@ const renderWindLineChart = () => {
 
   // ---- 各模型预测曲线 ----
   Object.entries(modelData.results).forEach(([mName, mData], idx) => {
-    const color = modelColors[idx % modelColors.length]
+    const color   = modelColors[idx % modelColors.length]
+    const predArr = mData.predictions?.[target] || []
+
+    // 计算与真实值的配对 MAE（当前 target）
     let stepMae = null
-    if (gt && Array.isArray(gt.wind_power) && Array.isArray(mData.predictions?.wind_power)) {
-      const preds   = mData.predictions.wind_power
-      const actuals = gt.wind_power
-      const n = Math.min(preds.length, actuals.length)
-      if (n > 0) {
-        stepMae = (preds.slice(0, n).reduce(
-          (sum, p, i) => sum + Math.abs(p - actuals[i]), 0
-        ) / n).toFixed(2)
-      }
+    if (Array.isArray(gtData) && gtData.length > 0 && predArr.length > 0) {
+      const n = Math.min(predArr.length, gtData.length)
+      stepMae = (predArr.slice(0, n).reduce(
+        (sum, p, i) => sum + Math.abs(p - gtData[i]), 0
+      ) / n).toFixed(2)
     }
-    const label = getModelLabel(mName)
+
+    const label      = getModelLabel(mName)
     const seriesName = stepMae !== null ? `${label}（MAE=${stepMae}）` : label
 
     seriesData.push({
@@ -393,8 +443,8 @@ const renderWindLineChart = () => {
       type: 'line',
       smooth: true,
       symbol: 'none',
-      data: mData.predictions?.wind_power || [],
-      lineStyle: { width: 2.5, color, type: 'solid' },
+      data: predArr,
+      lineStyle: { width: 2.5, color },
       itemStyle: { color },
       z: 10 + idx,
       emphasis: { focus: 'series', lineStyle: { width: 4 } }
@@ -415,19 +465,14 @@ const renderWindLineChart = () => {
           const isReal = p.seriesName.includes('真实值')
           const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:6px;${isReal ? 'border:2px solid #fff' : ''}"></span>`
           const valStr = p.value !== undefined ? Number(p.value).toFixed(2) : '--'
-          const weight = isReal ? 'font-weight:700' : ''
-          html += `<div style="${weight};line-height:22px">${dot}${p.seriesName}: <b style="color:${p.color}">${valStr} MW</b></div>`
+          html += `<div style="${isReal ? 'font-weight:700' : ''};line-height:22px">${dot}${p.seriesName}: <b style="color:${p.color}">${valStr} MW</b></div>`
         })
         return html
       }
     },
     legend: {
       textStyle: { color: '#d0e8ff', fontSize: 12, fontWeight: '500' },
-      top: 8,
-      icon: 'roundRect',
-      itemWidth: 20,
-      itemHeight: 4,
-      itemGap: 16
+      top: 8, icon: 'roundRect', itemWidth: 20, itemHeight: 4, itemGap: 16
     },
     grid: { left: '4%', right: '3%', bottom: '12%', top: '14%', containLabel: true },
     xAxis: {
@@ -435,8 +480,7 @@ const renderWindLineChart = () => {
       boundaryGap: false,
       data: xLabels,
       axisLabel: {
-        color: '#8ab4d4',
-        fontSize: 11,
+        color: '#8ab4d4', fontSize: 11,
         rotate: xLabels.some(l => l.includes('-')) ? 35 : 0
       },
       axisLine: { lineStyle: { color: '#1e3a5f', width: 1.5 } },
@@ -444,7 +488,7 @@ const renderWindLineChart = () => {
     },
     yAxis: {
       type: 'value',
-      name: '风电功率 (MW)',
+      name: `${targetLabel} (${unit})`,
       nameTextStyle: { color: '#8ab4d4', fontSize: 12 },
       splitLine: { lineStyle: { color: '#162d45', type: 'dashed' } },
       axisLabel: { color: '#8ab4d4', fontSize: 11 },
@@ -452,7 +496,6 @@ const renderWindLineChart = () => {
     },
     series: seriesData
   }
-  // 第二参数 true = 替换模式，彻底清除旧 series
   windLineChart.setOption(option, true)
 }
 
@@ -858,5 +901,64 @@ onBeforeUnmount(() => {
 .chart-container, .extended-height {
   background: #0d1b2a;
   border-radius: 8px;
+}
+
+/* ============================================================
+   曲线对比控制栏
+   ============================================================ */
+.chart-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #1e3a5f;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-label {
+  font-size: 13px;
+  color: #7ecfff;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.context-info {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: #8ab4d4;
+  background: rgba(56, 217, 255, 0.06);
+  border: 1px solid rgba(56, 217, 255, 0.2);
+  border-radius: 6px;
+  padding: 5px 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Element Plus 单选按钮深色适配 */
+.analysis-container :deep(.el-radio-button__inner) {
+  background: rgba(14, 31, 51, 0.8);
+  border-color: #2a4a6b;
+  color: #8ab4d4;
+  font-size: 12px;
+}
+.analysis-container :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background: linear-gradient(135deg, #1e3a5f, #0e2a45);
+  border-color: #38d9ff;
+  color: #38d9ff;
+  box-shadow: 0 0 8px rgba(56, 217, 255, 0.3);
+}
+
+/* 卡片标题的 tag 对齐 */
+.card-header h4 {
+  display: flex;
+  align-items: center;
 }
 </style>
