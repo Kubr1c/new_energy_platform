@@ -67,14 +67,15 @@ class DispatchModel:
         dt = 1.0
         dod = np.zeros(24)
         soc = np.zeros(24)
-        soc[0] = 0.5  # 初始 SOC
+        soc_init = 0.5  # 初始 SOC
         for t in range(24):
+            soc_prev = soc_init if t == 0 else soc[t-1]
             if Pc[t] > 0:
-                soc[t] = soc[t-1] + (Pc[t] * dt * self.eta_c) / self.E_rated
+                soc[t] = soc_prev + (Pc[t] * dt * self.eta_c) / self.E_rated
             elif Pd[t] > 0:
-                soc[t] = soc[t-1] - (Pd[t] * dt) / (self.eta_d * self.E_rated)
+                soc[t] = soc_prev - (Pd[t] * dt) / (self.eta_d * self.E_rated)
             else:
-                soc[t] = soc[t-1]
+                soc[t] = soc_prev
             # 计算放电深度：若放电，则 DOD = (1 - soc) 近似
             if Pd[t] > 0:
                 dod[t] = 1 - soc[t]
@@ -99,15 +100,16 @@ class DispatchModel:
         
         # SOC 动态约束
         soc = np.zeros(24)
-        soc[0] = 0.5
+        soc_init = 0.5
         for t in range(24):
+            soc_prev = soc_init if t == 0 else soc[t-1]
             if Pc[t] > 0:
                 delta = (Pc[t] * 1.0 * self.eta_c) / self.E_rated
             elif Pd[t] > 0:
                 delta = -(Pd[t] * 1.0) / (self.eta_d * self.E_rated)
             else:
                 delta = 0
-            soc[t] = soc[t-1] + delta
+            soc[t] = soc_prev + delta
             # SOC 上下限 - 降低惩罚系数
             if soc[t] < self.soc_min:
                 violations += (self.soc_min - soc[t]) * 10
@@ -139,14 +141,15 @@ class DispatchModel:
     def calculate_soc_curve(self, Pc, Pd):
         """计算SOC曲线"""
         soc = np.zeros(24)
-        soc[0] = 0.5  # 初始 SOC
+        soc_init = 0.5  # 初始 SOC
         for t in range(24):
+            soc_prev = soc_init if t == 0 else soc[t-1]
             if Pc[t] > 0:
-                soc[t] = soc[t-1] + (Pc[t] * 1.0 * self.eta_c) / self.E_rated
+                soc[t] = soc_prev + (Pc[t] * 1.0 * self.eta_c) / self.E_rated
             elif Pd[t] > 0:
-                soc[t] = soc[t-1] - (Pd[t] * 1.0) / (self.eta_d * self.E_rated)
+                soc[t] = soc_prev - (Pd[t] * 1.0) / (self.eta_d * self.E_rated)
             else:
-                soc[t] = soc[t-1]
+                soc[t] = soc_prev
             # 确保SOC在合理范围内
             soc[t] = np.clip(soc[t], self.soc_min, self.soc_max)
         return soc

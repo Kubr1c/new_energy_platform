@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
@@ -7,12 +8,29 @@ class User(db.Model):
     __tablename__ = 'sys_user'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
-    password = db.Column(db.String(128), nullable=False)
+    password_hash = db.Column('password', db.String(256), nullable=False)
     role = db.Column(db.String(20), default='operator')  # admin/operator/viewer
     email = db.Column(db.String(120), unique=True)
     status = db.Column(db.String(20), default='active')  # active/inactive/locked
     last_login = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def set_password(self, password):
+        """使用 werkzeug 生成密码哈希"""
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        """验证密码是否匹配哈希"""
+        # 兼容旧的明文密码：如果 hash 不以 'pbkdf2:' / 'scrypt:' 开头，
+        # 说明是旧的明文密码，做一次性迁移
+        if not self.password_hash.startswith(('pbkdf2:', 'scrypt:')):
+            if self.password_hash == password:
+                # 明文匹配，自动迁移为哈希
+                self.set_password(password)
+                db.session.commit()
+                return True
+            return False
+        return check_password_hash(self.password_hash, password)
 
 class NewEnergyData(db.Model):
     __tablename__ = 'new_energy_data'

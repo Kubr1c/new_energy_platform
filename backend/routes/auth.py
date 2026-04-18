@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from models.database import db, User
 import jwt
 import datetime
@@ -6,8 +6,10 @@ from functools import wraps
 
 auth_bp = Blueprint('auth', __name__)
 
-# JWT密钥（实际应用中应该从配置文件读取）
-SECRET_KEY = 'your-secret-key-change-in-production'
+
+def _get_secret_key():
+    """从 Flask app config 统一读取 SECRET_KEY"""
+    return current_app.config['SECRET_KEY']
 
 
 def token_required(f):
@@ -21,20 +23,20 @@ def token_required(f):
             try:
                 token = auth_header.split(" ")[1]  # Bearer <token>
             except IndexError:
-                return jsonify({'code': 401, 'message': '令牌格式错误'})
+                return jsonify({'code': 401, 'message': '令牌格式错误'}), 401
         
         if not token:
-            return jsonify({'code': 401, 'message': '缺少访问令牌'})
+            return jsonify({'code': 401, 'message': '缺少访问令牌'}), 401
         
         try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            current_user = User.query.get(data['user_id'])
+            data = jwt.decode(token, _get_secret_key(), algorithms=["HS256"])
+            current_user = db.session.get(User, data['user_id'])
             if not current_user:
-                return jsonify({'code': 401, 'message': '用户不存在'})
+                return jsonify({'code': 401, 'message': '用户不存在'}), 401
         except jwt.ExpiredSignatureError:
-            return jsonify({'code': 401, 'message': '令牌已过期'})
+            return jsonify({'code': 401, 'message': '令牌已过期'}), 401
         except jwt.InvalidTokenError:
-            return jsonify({'code': 401, 'message': '无效令牌'})
+            return jsonify({'code': 401, 'message': '无效令牌'}), 401
         
         return f(current_user, *args, **kwargs)
     
@@ -57,12 +59,16 @@ def register():
         if existing_user:
             return jsonify({'code': 400, 'message': '用户名已存在'})
         
-        # 创建新用户
+        # 创建新用户（禁止通过注册接口自选 admin 角色）
+        requested_role = data.get('role', 'operator')
+        if requested_role not in ('operator', 'viewer'):
+            requested_role = 'operator'
+        
         new_user = User(
             username=data['username'],
-            password=data['password'],
-            role=data.get('role', 'operator')  # 默认角色为operator
+            role=requested_role
         )
+        new_user.set_password(data['password'])
         
         db.session.add(new_user)
         db.session.commit()
@@ -96,17 +102,17 @@ def login():
         if not user:
             return jsonify({'code': 401, 'message': '用户名或密码错误'})
         
-        # 验证密码
-        if user.password != data['password']:
+        # 验证密码（支持自动从明文迁移到哈希）
+        if not user.check_password(data['password']):
             return jsonify({'code': 401, 'message': '用户名或密码错误'})
         
-        # 生成JWT令牌
+        # 生成JWT令牌（使用 Flask app config 中的 SECRET_KEY）
         token = jwt.encode({
             'user_id': user.id,
             'username': user.username,
             'role': user.role,
             'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-        }, SECRET_KEY, algorithm="HS256")
+        }, _get_secret_key(), algorithm="HS256")
         
         return jsonify({
             'code': 200, 
@@ -152,11 +158,11 @@ def change_password(current_user):
                 return jsonify({'code': 400, 'message': f'缺少{field}字段'})
         
         # 验证旧密码
-        if current_user.password != data['old_password']:
+        if not current_user.check_password(data['old_password']):
             return jsonify({'code': 400, 'message': '旧密码错误'})
         
-        # 更新密码
-        current_user.password = data['new_password']
+        # 更新密码（使用哈希存储）
+        current_user.set_password(data['new_password'])
         db.session.commit()
         
         return jsonify({'code': 200, 'message': '密码修改成功'})
@@ -197,7 +203,7 @@ def update_user(current_user, user_id):
     
     try:
         data = request.json
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         
         if not user:
             return jsonify({'code': 404, 'message': '用户不存在'})
@@ -233,7 +239,7 @@ def delete_user(current_user, user_id):
         return jsonify({'code': 403, 'message': '权限不足'})
     
     try:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         
         if not user:
             return jsonify({'code': 404, 'message': '用户不存在'})
@@ -258,7 +264,7 @@ def reset_user_password(current_user, user_id):
         return jsonify({'code': 403, 'message': 'insufficient permissions'})
     
     try:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         
         if not user:
             return jsonify({'code': 404, 'message': 'user does not exist'})
@@ -267,8 +273,8 @@ def reset_user_password(current_user, user_id):
         if not data or not data.get('new_password'):
             return jsonify({'code': 400, 'message': 'missing new_password field'})
         
-        # update password
-        user.password = data['new_password']
+        # update password (使用哈希存储)
+        user.set_password(data['new_password'])
         db.session.commit()
         
         return jsonify({'code': 200, 'message': 'password reset successfully'})

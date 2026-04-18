@@ -270,8 +270,8 @@ export default {
     async loadAvailableModels() {
       try {
         const response = await this.$http.get('/api/predict/models')
-        if (response && response.code === 200 && Array.isArray(response.data)) {
-          this.availableModels = response.data
+        if (response && response.data && response.data.code === 200 && Array.isArray(response.data.data)) {
+          this.availableModels = response.data.data
         }
       } catch (error) {
         console.warn('加载模型列表失败，使用默认列表', error)
@@ -290,15 +290,15 @@ export default {
           model_type: this.modelType
         })
 
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success(`[${this.getModelLabel(this.modelType)}] 单步预测完成`)
-          const predictionData = response.data?.prediction || null
+          const predictionData = response.data.data?.prediction || null
           if (predictionData) {
             this.updatePredictionChart(predictionData)
           }
           this.loadPredictionHistory()
         } else {
-          this.$message.error(response?.message || '单步预测失败')
+          this.$message.error(response?.data?.message || '单步预测失败')
         }
       } catch (error) {
         this.$message.error('预测执行失败')
@@ -313,27 +313,27 @@ export default {
           model_type: this.modelType
         })
 
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success(`[${this.getModelLabel(this.modelType)}] 批量预测完成`)
-          const predictionData = response.data?.predictions || null
+          const predictionData = response.data.data?.predictions || null
           if (predictionData) {
             this.updatePredictionChart(predictionData)
           }
           // 更新预测指标
-          if (response.data?.metrics) {
-            this.modelAccuracy = response.data.metrics.model_accuracy
-            this.confidence = response.data.metrics.confidence
-            this.dataQuality = response.data.metrics.data_quality
+          if (response.data.data?.metrics) {
+            this.modelAccuracy = response.data.data.metrics.model_accuracy
+            this.confidence = response.data.data.metrics.confidence
+            this.dataQuality = response.data.data.metrics.data_quality
             const statusMap = {
               'normal': { type: 'success', text: '运行正常' },
               'warning': { type: 'warning', text: '需要注意' },
               'error': { type: 'danger', text: '运行异常' }
             }
-            this.modelStatus = statusMap[response.data.metrics.model_status] || statusMap['normal']
+            this.modelStatus = statusMap[response.data.data.metrics.model_status] || statusMap['normal']
           }
           this.loadPredictionHistory()
         } else {
-          this.$message.error(response?.message || '批量预测失败')
+          this.$message.error(response?.data?.message || '批量预测失败')
         }
       } catch (error) {
         this.$message.error('批量预测执行失败')
@@ -373,8 +373,8 @@ export default {
           params: { limit: 20, type: 'multi' }
         })
 
-        if (response && response.code === 200) {
-          this.predictionHistory = response.data || []
+        if (response && response.data && response.data.code === 200) {
+          this.predictionHistory = response.data.data || []
           if (this.predictionHistory.length > 0 && this.predictionHistory[0].data) {
             this.updatePredictionChart(this.predictionHistory[0].data)
           }
@@ -395,15 +395,15 @@ export default {
           predict_id: row.id
         })
 
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('预测评估完成')
-          if (response.data?.overall_mape !== undefined) {
-            this.mapeValue = Number(response.data.overall_mape.toFixed(2))
+          if (response.data.data?.overall_mape !== undefined) {
+            this.mapeValue = Number(response.data.data.overall_mape.toFixed(2))
             this.modelAccuracy = Number((100 - this.mapeValue).toFixed(2))
           }
           this.loadPredictionHistory()
         } else {
-          this.$message.error(response?.message || '预测评估失败')
+          this.$message.error(response?.data?.message || '预测评估失败')
         }
       } catch (error) {
         this.$message.error('预测评估失败')
@@ -419,11 +419,11 @@ export default {
 
         const response = await this.$http.delete(`/api/predict/${row.id}`)
 
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('预测记录删除成功')
           this.loadPredictionHistory()
         } else {
-          this.$message.error(response?.message || '删除失败')
+          this.$message.error(response?.data?.message || '删除失败')
         }
       } catch (error) {
         if (error !== 'cancel') {
@@ -447,11 +447,11 @@ export default {
           predict_ids: predictIds
         })
 
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('批量删除成功')
           this.loadPredictionHistory()
         } else {
-          this.$message.error(response?.message || '批量删除失败')
+          this.$message.error(response?.data?.message || '批量删除失败')
         }
       } catch (error) {
         if (error !== 'cancel') {

@@ -580,14 +580,14 @@ export default {
           dispatch_id: record.id
         })
 
-        if (response && response.code === 200) {
-          this.simulationResult = response.data
+        if (response && response.data && response.data.code === 200) {
+          this.simulationResult = response.data.data
           this.simulationDialogVisible = true
           this.$nextTick(() => {
-            this.updateSimulationChart(response.data, record)
+            this.updateSimulationChart(response.data.data, record)
           })
         } else {
-          this.$message.error(response?.message || '模拟执行失败')
+          this.$message.error(response?.data?.message || '模拟执行失败')
         }
       } catch (error) {
         this.$message.error('模拟执行失败')

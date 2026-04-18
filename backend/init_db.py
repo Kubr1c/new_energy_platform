@@ -27,36 +27,27 @@ def init_database():
         db.create_all()
         print("✓ 数据库表创建成功")
         
-        # 创建默认管理员用户
+        # 创建默认管理员用户（密码使用哈希存储）
         admin_exists = User.query.filter_by(username='admin').first()
         if not admin_exists:
-            admin_user = User(
-                username='admin',
-                password='admin123',
-                role='admin'
-            )
+            admin_user = User(username='admin', role='admin')
+            admin_user.set_password('admin123')
             db.session.add(admin_user)
             print("✓ 默认管理员用户创建成功 (admin/admin123)")
         
         # 创建默认操作员用户
         operator_exists = User.query.filter_by(username='operator').first()
         if not operator_exists:
-            operator_user = User(
-                username='operator',
-                password='operator123',
-                role='operator'
-            )
+            operator_user = User(username='operator', role='operator')
+            operator_user.set_password('operator123')
             db.session.add(operator_user)
             print("✓ 默认操作员用户创建成功 (operator/operator123)")
         
         # 创建默认查看者用户
         viewer_exists = User.query.filter_by(username='viewer').first()
         if not viewer_exists:
-            viewer_user = User(
-                username='viewer',
-                password='viewer123',
-                role='viewer'
-            )
+            viewer_user = User(username='viewer', role='viewer')
+            viewer_user.set_password('viewer123')
             db.session.add(viewer_user)
             print("✓ 默认查看者用户创建成功 (viewer/viewer123)")
         

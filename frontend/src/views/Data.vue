@@ -216,8 +216,8 @@ export default {
         
         console.log('统计数据API响应:', response)
 
-        if (response && response.code === 200) {
-          this.statistics = response.data
+        if (response && response.data && response.data.code === 200) {
+          this.statistics = response.data.data
           console.log('统计数据加载成功:', this.statistics)
         } else {
           console.error('统计数据API响应错误:', response)
@@ -242,9 +242,9 @@ export default {
         })
 
         const response = await this.$http.get('/api/data/query', { params })
-        if (response && response.code === 200) {
-          this.tableData = response.data
-          this.total = response.data.length
+        if (response && response.data && response.data.code === 200) {
+          this.tableData = response.data.data
+          this.total = response.data.data.length
         }
       } catch (error) {
         this.$message.error('加载数据失败')
@@ -320,12 +320,12 @@ export default {
           headers: { 'Content-Type': 'multipart/form-data' }
         })
         
-        if (response && response.code === 200) {
-          this.$message.success(response.message)
+        if (response && response.data && response.data.code === 200) {
+          this.$message.success(response.data.message)
           this.loadStatistics()
           this.loadData()
         } else {
-          this.$message.error(response?.message || '上传失败')
+          this.$message.error(response?.data?.message || '上传失败')
         }
       } catch (error) {
         this.$message.error('文件上传失败')

@@ -114,56 +114,34 @@ def get_latest_data():
     """
     获取最新的 24 条小时级数据，用于仪表盘实时功率曲线展示。
 
-    双模式设计：
-    - 近期模式（7天内有数据）：返回最新 24 条，附 mode='realtime'
-    - 历史回放模式（无近期数据）：返回数据库中最新一整天（00:00~23:00）
-      的 24 条，附 mode='history' 和 data_date 字段提示前端显示标注
+    策略：取数据库中时间戳最新的 24 条记录（按时间升序返回），
+    不依赖系统时钟，确保即使数据未实时更新也能正常显示历史曲线。
+    可通过 ?limit=N 参数自定义返回条数（最大 168，即 7 天）。
     """
     try:
         limit = request.args.get('limit', 24, type=int)
-        limit = max(1, min(limit, 168))
+        limit = max(1, min(limit, 168))   # 限制在 1-168 之间
 
-        # 判断是否有近期数据（7天内）
-        from datetime import timezone
-        now_utc   = datetime.utcnow()
-        week_ago  = now_utc - timedelta(days=7)
-        recent_count = NewEnergyData.query.filter(
-            NewEnergyData.timestamp >= week_ago
-        ).count()
-
-        if recent_count > 0:
-            # 近期模式：直接取最新 limit 条
-            mode = 'realtime'
-            rows = (
-                NewEnergyData.query
-                .order_by(NewEnergyData.timestamp.desc())
-                .limit(limit)
-                .all()
-            )
-            rows = list(reversed(rows))
-            data_date = None
-        else:
-            # 历史回放模式：取数据库最新一天 00:00~23:59 的数据
-            mode = 'history'
-            last = NewEnergyData.query.order_by(
-                NewEnergyData.timestamp.desc()
-            ).first()
-            if last is None:
-                return jsonify({'code': 200, 'data': [], 'mode': 'empty'})
-
-            day_start = last.timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
-            day_end   = day_start + timedelta(hours=24)
-            rows = (
-                NewEnergyData.query
-                .filter(
-                    NewEnergyData.timestamp >= day_start,
-                    NewEnergyData.timestamp <  day_end,
-                )
+        # 取最新 limit 条，再按时间升序排列（用于图表从左到右展示）
+        subq = (
+            NewEnergyData.query
+            .order_by(NewEnergyData.timestamp.desc())
+            .limit(limit)
+            .subquery()
+        )
+        from sqlalchemy import select
+        from models.database import db
+        rows = (
+            db.session.execute(
+                select(NewEnergyData)
+                .where(NewEnergyData.id.in_(
+                    select(subq.c.id)
+                ))
                 .order_by(NewEnergyData.timestamp.asc())
-                .limit(limit)
-                .all()
             )
-            data_date = day_start.strftime('%Y-%m-%d')
+            .scalars()
+            .all()
+        )
 
         result = [{
             'timestamp':   item.timestamp.isoformat(),
@@ -175,12 +153,7 @@ def get_latest_data():
             'wind_speed':  item.wind_speed,
         } for item in rows]
 
-        return jsonify({
-            'code':      200,
-            'data':      result,
-            'mode':      mode,
-            'data_date': data_date,   # None=realtime, 'YYYY-MM-DD'=history
-        })
+        return jsonify({'code': 200, 'data': result})
 
     except Exception as e:
         return jsonify({'code': 500, 'message': f'查询错误: {str(e)}'})

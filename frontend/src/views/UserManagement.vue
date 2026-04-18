@@ -328,8 +328,8 @@ export default {
       this.usersLoading = true
       try {
         const response = await this.$http.get('/api/auth/users')
-        if (response && response.code === 200) {
-          const userList = Array.isArray(response.data) ? response.data : []
+        if (response && response.data && response.data.code === 200) {
+          const userList = Array.isArray(response.data.data) ? response.data.data : []
           this.users = userList.map(user => ({
             ...user,
             email: user.email || '',
@@ -338,7 +338,7 @@ export default {
           }))
           this.totalUsers = this.users.length
         } else {
-          this.$message.error(response?.message || '加载用户列表失败')
+          this.$message.error(response?.data?.message || '加载用户列表失败')
         }
       } catch (error) {
         console.error('加载用户列表失败:', error)
@@ -420,12 +420,12 @@ export default {
           status: this.editUserForm.status
         })
         
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('用户信息更新成功')
           this.editUserDialogVisible = false
           this.loadUsers()
         } else {
-          this.$message.error(response?.message || '更新用户失败')
+          this.$message.error(response?.data?.message || '更新用户失败')
         }
       } catch (error) {
         console.error('更新用户失败:', error)
@@ -454,11 +454,11 @@ export default {
           new_password: this.resetPasswordForm.newPassword
         })
         
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('密码重置成功')
           this.resetPasswordDialogVisible = false
         } else {
-          this.$message.error(response?.message || '重置密码失败')
+          this.$message.error(response?.data?.message || '重置密码失败')
         }
       } catch (error) {
         console.error('重置密码失败:', error)
@@ -478,11 +478,11 @@ export default {
         
         const response = await this.$http.delete(`/api/auth/users/${user.id}`)
         
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('删除用户成功')
           this.loadUsers()
         } else {
-          this.$message.error(response?.message || '删除用户失败')
+          this.$message.error(response?.data?.message || '删除用户失败')
         }
       } catch (error) {
         if (error !== 'cancel') {

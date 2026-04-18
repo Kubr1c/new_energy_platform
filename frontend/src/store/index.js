@@ -51,13 +51,12 @@ export default createStore({
         commit('SET_LOADING', true)
         const response = await axios.post('/api/auth/login', credentials)
         
-        // axios interceptor returns response.data directly
-        if (response.code === 200) {
-          commit('SET_TOKEN', response.data.token)
-          commit('SET_USER', response.data.user)
-          return { success: true, data: response.data }
+        if (response.data.code === 200) {
+          commit('SET_TOKEN', response.data.data.token)
+          commit('SET_USER', response.data.data.user)
+          return { success: true, data: response.data.data }
         } else {
-          return { success: false, message: response.message }
+          return { success: false, message: response.data.message }
         }
       } catch (error) {
         return { success: false, message: error.message || 'login failed' }
@@ -76,11 +75,10 @@ export default createStore({
         commit('SET_LOADING', true)
         const response = await axios.post('/api/auth/register', userData)
         
-        // axios interceptor returns response.data directly
-        if (response.code === 200) {
-          return { success: true, data: response.data }
+        if (response.data.code === 200) {
+          return { success: true, data: response.data.data }
         } else {
-          return { success: false, message: response.message }
+          return { success: false, message: response.data.message }
         }
       } catch (error) {
         return { success: false, message: error.message || 'registration failed' }
@@ -94,11 +92,10 @@ export default createStore({
         commit('SET_LOADING', true)
         const response = await axios.post('/api/auth/change_password', passwordData)
         
-        // axios interceptor returns response.data directly
-        if (response.code === 200) {
-          return { success: true, message: response.message }
+        if (response.data.code === 200) {
+          return { success: true, message: response.data.message }
         } else {
-          return { success: false, message: response.message }
+          return { success: false, message: response.data.message }
         }
       } catch (error) {
         return { success: false, message: error.message || 'password change failed' }

@@ -3,6 +3,7 @@ import App from './App.vue'
 import router from './router'
 import store from './store'
 import ElementPlus from 'element-plus'
+import { ElMessage } from 'element-plus'
 import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import axios from 'axios'
@@ -26,9 +27,10 @@ axios.interceptors.request.use(
 )
 
 // 响应拦截器
+// 注意：不再自动解包 response.data，所有组件统一使用 response.data.xxx 访问数据
 axios.interceptors.response.use(
   response => {
-    return response.data
+    return response
   },
   error => {
     if (error.response) {
@@ -39,19 +41,19 @@ axios.interceptors.response.use(
           router.push('/login')
           break
         case 403:
-          ElementPlus.ElMessage.error('权限不足')
+          ElMessage.error('权限不足')
           break
         case 404:
-          ElementPlus.ElMessage.error('请求的资源不存在')
+          ElMessage.error('请求的资源不存在')
           break
         case 500:
-          ElementPlus.ElMessage.error('服务器内部错误')
+          ElMessage.error('服务器内部错误')
           break
         default:
-          ElementPlus.ElMessage.error(error.response.data.message || '请求失败')
+          ElMessage.error(error.response.data?.message || '请求失败')
       }
     } else {
-      ElementPlus.ElMessage.error('网络连接失败')
+      ElMessage.error('网络连接失败')
     }
     return Promise.reject(error)
   }
