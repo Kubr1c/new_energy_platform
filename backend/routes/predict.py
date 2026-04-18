@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from models.database import db, PredictResult, NewEnergyData
 from models.predict import Predictor
 from models.model_registry import list_available_models
+from models.metrics import evaluate_model_on_testset
 import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
@@ -10,6 +11,46 @@ predict_bp = Blueprint('predict', __name__)
 
 # 多模型预测器缓存：model_type → Predictor 实例
 _predictor_cache = {}
+
+# 模型在测试集上的真实指标缓存：model_type → metrics dict
+# 只在第一次调用时计算，后续直接复用（避免每次请求重跑 168 步推理）
+_metrics_cache = {}
+
+
+def _get_model_metrics(model_type: str) -> dict:
+    """获取指定模型在测试集上的真实评估指标（带缓存）。"""
+    if model_type not in _metrics_cache:
+        try:
+            predictor_instance = get_predictor(model_type)
+            result = evaluate_model_on_testset(predictor_instance)
+            overall = result['overall']
+            # 转换为前端期望的字段名，并附加数据质量评分
+            mape = overall['mape']
+            # model_accuracy: 100 - overall_mape，clamp 到 [0, 100]
+            accuracy = round(max(0.0, min(100.0, 100.0 - mape)), 2)
+            _metrics_cache[model_type] = {
+                'model_accuracy': accuracy,
+                'mape':           round(mape, 2),
+                'rmse':           round(overall['rmse'], 4),
+                'mae':            round(overall['mae'],  4),
+                'r2':             round(overall['r2'],   4),
+                'per_target':     result['per_target'],
+                'n_samples':      result['n_samples'],
+                'confidence':     round(max(0.0, min(100.0, accuracy * 0.95)), 1),
+                'data_quality':   min(5, max(1, round(accuracy / 20))),
+                'model_status':   'normal' if mape < 30 else 'warning',
+            }
+        except Exception as e:
+            # 评估失败时返回占位符，不影响预测功能
+            _metrics_cache[model_type] = {
+                'model_accuracy': None,
+                'mape': None, 'rmse': None, 'mae': None, 'r2': None,
+                'per_target': {}, 'n_samples': 0,
+                'confidence': None, 'data_quality': None,
+                'model_status': 'error',
+                'error': str(e),
+            }
+    return _metrics_cache[model_type]
 
 def serialize_prediction_data(data):
     """convert numpy arrays to Python lists for JSON serialization"""
@@ -102,22 +143,17 @@ def predict_single():
         # convert numpy arrays to Python lists for JSON serialization
         serializable_prediction = serialize_prediction_data(prediction)
         
-        # 计算模型性能指标
-        model_metrics = {
-            'model_accuracy': 92.5,  # 基于训练集准确度
-            'confidence': 85,       # 预测置信度
-            'data_quality': 4,      # 数据质量评分(1-5)
-            'model_status': 'normal' # 模型状态
-        }
-        
-        # 保存预测结果到数据库（含模型类型）
+        # 获取模型在测试集上的真实评估指标（含缓存）
+        model_metrics = _get_model_metrics(model_type)
+
+        # 保存预测结果到数据库（含模型类型和真实 MAPE）
         predict_record = PredictResult(
             predict_type='multi',
             model_type=model_type,
             start_time=datetime.utcnow(),
             horizon=1,
             data=serializable_prediction,
-            mape=None  # 单步预测暂时无法计算MAPE
+            mape=model_metrics.get('mape')
         )
         db.session.add(predict_record)
         db.session.commit()
@@ -221,30 +257,20 @@ def predict_batch():
             # 添加到数据集
             current_data = pd.concat([current_data.iloc[1:], pd.DataFrame([next_row])], ignore_index=True)
         
-        # debug: check prediction data length
-        print(f"Debug: [{model_type}] Prediction data lengths:")
-        for key, values in predictions.items():
-            print(f"  {key}: {len(values)} values")
-        
         # convert numpy arrays to Python lists for JSON serialization
         serializable_predictions = serialize_prediction_data(predictions)
         
-        # 计算模型性能指标
-        model_metrics = {
-            'model_accuracy': 92.5,  # 基于训练集准确度
-            'confidence': 85,       # 预测置信度
-            'data_quality': 4,      # 数据质量评分(1-5)
-            'model_status': 'normal' # 模型状态
-        }
-        
-        # 保存预测结果到数据库（含模型类型）
+        # 获取模型在测试集上的真实评估指标（含缓存，首次调用较慢）
+        model_metrics = _get_model_metrics(model_type)
+
+        # 保存预测结果到数据库（含模型类型和真实 MAPE）
         predict_record = PredictResult(
             predict_type='multi',
             model_type=model_type,
             start_time=datetime.utcnow(),
             horizon=24,
             data=serializable_predictions,
-            mape=None  # 批量预测暂时无法计算MAPE
+            mape=model_metrics.get('mape')
         )
         db.session.add(predict_record)
         db.session.commit()

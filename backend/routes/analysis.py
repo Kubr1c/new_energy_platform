@@ -1,7 +1,11 @@
 from flask import Blueprint, request, jsonify
 from models.database import db, PredictResult, StrategyConfig
 from optimization.solver import solve_dispatch
-from routes.predict import _build_recent_data_with_padding, get_predictor, serialize_prediction_data
+from routes.predict import (
+    _build_recent_data_with_padding, get_predictor,
+    serialize_prediction_data, _get_model_metrics
+)
+from models.metrics import evaluate_model_on_testset
 import numpy as np
 from datetime import datetime
 import pandas as pd
@@ -10,88 +14,87 @@ import time
 
 analysis_bp = Blueprint('analysis', __name__)
 
+
+def _to_scalar(v):
+    """将 numpy 标量/单元素数组统一转为 Python float。"""
+    if hasattr(v, 'item'):
+        return v.item()
+    if hasattr(v, 'tolist'):
+        lst = v.tolist()
+        return lst[0] if len(lst) == 1 else float(np.mean(lst))
+    return float(v)
+
+
 @analysis_bp.route('/api/analysis/model_compare', methods=['POST'])
 def model_compare():
     """
-    比较多个预测模型的性能。
-    请求参数: {"models": ["attention_lstm", "cnn_lstm", ...]}
-    返回: 各自的预测序列和 MAPE/RMSE/MAE
+    比较多个预测模型在测试集上的真实性能，同时返回最近 24 小时的预测序列。
+
+    请求参数:
+        {"models": ["attention_lstm", "cnn_lstm", ...]}
+
+    返回:
+        各模型的预测序列（基于最新历史数据滚动预测 24 步）
+        + 在 CSV 测试集上计算的真实 MAPE / RMSE / MAE / R²
     """
     try:
         data = request.json or {}
         model_names = data.get('models', ['attention_lstm'])
-        
-        # 获取最新的历史数据供预测
-        recent_data, original_count = _build_recent_data_with_padding(required_hours=24)
+
+        # 获取最新历史数据，用于生成演示用的 24 步预测序列（供前端图表展示）
+        recent_data, _ = _build_recent_data_with_padding(required_hours=24)
         if recent_data is None:
             return jsonify({'code': 400, 'message': '没有足够数据进行预测'})
-            
+
         results = {}
-        
-        # 对每一个模型分别执行预测
+
         for model_type in model_names:
             predictor_instance = get_predictor(model_type)
+
+            # ---- 1. 生成未来 24 小时预测序列（用于前端折线图展示） ----
             predictions = {'wind_power': [], 'pv_power': [], 'load': []}
             current_data = recent_data.copy()
-            
+
             for hour in range(24):
                 pred = predictor_instance.predict(current_data)
-                
-                for key in predictions.keys():
-                    pred_value = pred[key]
-                    if hasattr(pred_value, 'item'):
-                        predictions[key].append(pred_value.item())
-                    elif hasattr(pred_value, 'tolist') and len(pred_value.tolist()) == 1:
-                        predictions[key].append(pred_value.tolist()[0])
-                    else:
-                        predictions[key].append(pred_value)
-                
-                next_timestamp = current_data.iloc[-1]['timestamp'] + timedelta(hours=1)
-                wind_power_val = predictions['wind_power'][-1]
-                pv_power_val = predictions['pv_power'][-1]
-                load_val = predictions['load'][-1]
-                
+                for key in predictions:
+                    predictions[key].append(_to_scalar(pred[key]))
+
+                next_ts = current_data.iloc[-1]['timestamp'] + timedelta(hours=1)
                 next_row = {
-                    'timestamp': next_timestamp,
-                    'wind_power': wind_power_val,
-                    'pv_power': pv_power_val,
-                    'load': load_val,
+                    'timestamp':   next_ts,
+                    'wind_power':  predictions['wind_power'][-1],
+                    'pv_power':    predictions['pv_power'][-1],
+                    'load':        predictions['load'][-1],
                     'temperature': current_data.iloc[-1]['temperature'],
-                    'irradiance': current_data.iloc[-1]['irradiance'],
-                    'wind_speed': current_data.iloc[-1]['wind_speed']
+                    'irradiance':  current_data.iloc[-1]['irradiance'],
+                    'wind_speed':  current_data.iloc[-1]['wind_speed'],
                 }
-                current_data = pd.concat([current_data.iloc[1:], pd.DataFrame([next_row])], ignore_index=True)
-            
-            # 使用简单的模拟性能指标，如果有真实的测试集，则这里可以针对测试集求真实 MAPE/RMSE
-            # 这里统一构造一套合理的对照值，供前端图表渲染用（假设各模型水平不同）
-            base_mape = 10.0 + np.random.rand() * 5.0
-            if model_type == 'attention_lstm':
-                base_mape = 4.2 + np.random.rand() * 1.5
-            elif model_type == 'transformer':
-                base_mape = 3.5 + np.random.rand() * 1.0
-            elif model_type == 'cnn_lstm':
-                base_mape = 5.0 + np.random.rand() * 2.0
-            elif model_type == 'gru':
-                base_mape = 6.5 + np.random.rand() * 2.0
-            elif model_type == 'standard_lstm':
-                base_mape = 7.5 + np.random.rand() * 2.5
-                
+                current_data = pd.concat(
+                    [current_data.iloc[1:], pd.DataFrame([next_row])],
+                    ignore_index=True
+                )
+
+            # ---- 2. 获取该模型在测试集上的真实指标（带缓存） ----
+            m = _get_model_metrics(model_type)
             metrics = {
-                'mape': round(base_mape, 2),
-                'rmse': round(base_mape * 3.5, 2),
-                'mae': round(base_mape * 2.1, 2)
+                'mape':           m.get('mape'),
+                'rmse':           m.get('rmse'),
+                'mae':            m.get('mae'),
+                'r2':             m.get('r2'),
+                'model_accuracy': m.get('model_accuracy'),
+                'per_target':     m.get('per_target', {}),
+                'n_samples':      m.get('n_samples', 0),
+                'data_source':    'test_data.csv (168 samples, 2023-02-01~07)',
             }
-                
+
             results[model_type] = {
                 'predictions': serialize_prediction_data(predictions),
-                'metrics': metrics
+                'metrics':     metrics,
             }
-        
-        return jsonify({
-            'code': 200,
-            'data': results
-        })
-        
+
+        return jsonify({'code': 200, 'data': results})
+
     except Exception as e:
         import traceback
         traceback.print_exc()

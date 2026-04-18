@@ -8,7 +8,11 @@ from numbers import Number
 class DataPreprocessor:
     def __init__(self, scaler_path=None):
         self.scaler = None
-        self.scaler_path = scaler_path or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'scaler.pkl')
+        # __file__ 位于 backend/preprocessing/data_utils.py
+        # scaler 位于 backend/data/scaler.pkl，故向上一级再进入 data/
+        self.scaler_path = scaler_path or os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), 'data', 'scaler.pkl'
+        )
 
     def handle_missing(self, df, method='linear'):
         """缺失值处理：线性插值或同期均值"""

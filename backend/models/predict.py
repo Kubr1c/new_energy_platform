@@ -27,7 +27,13 @@ class Predictor:
         self.model = get_model(model_type, input_size, output_size).to(self.device)
         
         if os.path.exists(model_path):
-            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            # weights_only=True 防止 pickle 任意代码执行（PyTorch >= 1.13）
+            try:
+                state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+            except TypeError:
+                # 旧版 PyTorch 不支持 weights_only 参数
+                state_dict = torch.load(model_path, map_location=self.device)
+            self.model.load_state_dict(state_dict)
             print(f"[{model_type}] 模型权重加载成功: {model_path}")
         else:
             print(f"Warning: Model file {model_path} not found for {model_type}. Using untrained model.")
