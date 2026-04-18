@@ -1,5 +1,5 @@
 from .database import db
-from .attention_lstm import AttentionLSTM, Attention
+from .attention_lstm import AttentionLSTM, BahdanauAttention
 from .standard_lstm import StandardLSTM
 from .gru_model import GRUModel
 from .cnn_lstm import CNNLSTM
@@ -10,7 +10,7 @@ from .predict import Predictor
 
 __all__ = [
     'db',
-    'AttentionLSTM', 'Attention',
+    'AttentionLSTM', 'BahdanauAttention',
     'StandardLSTM', 'GRUModel', 'CNNLSTM', 'TimeSeriesTransformer',
     'get_model', 'list_available_models', 'MODEL_REGISTRY',
     'train_model', 'Predictor',
