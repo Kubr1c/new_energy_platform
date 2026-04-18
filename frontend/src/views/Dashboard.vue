@@ -376,7 +376,7 @@ export default {
     },
     updatePowerChart(data) {
       if (!data || !Array.isArray(data) || data.length === 0) {
-        // 设置空图表数据
+        this.powerChartOption.xAxis.data = Array.from({length: 24}, (_, i) => `${i}:00`)
         this.powerChartOption.series = [
           { name: '风电', type: 'line', data: [] },
           { name: '光伏', type: 'line', data: [] },
@@ -384,15 +384,25 @@ export default {
         ]
         return
       }
-      
-      const windData = data.map(item => this.toNumber(item.wind_power, 0))
-      const pvData = data.map(item => this.toNumber(item.pv_power, 0))
-      const loadData = data.map(item => this.toNumber(item.load, 0))
-      
+
+      // X 轴使用实际时间戳（格式：MM-DD HH:mm）
+      const labels = data.map(item => {
+        const d = new Date(item.timestamp)
+        const mm = String(d.getMonth() + 1).padStart(2, '0')
+        const dd = String(d.getDate()).padStart(2, '0')
+        const hh = String(d.getHours()).padStart(2, '0')
+        const mi = String(d.getMinutes()).padStart(2, '0')
+        return `${mm}-${dd} ${hh}:${mi}`
+      })
+
+      this.powerChartOption.xAxis.data = labels
       this.powerChartOption.series = [
-        { name: '风电', type: 'line', data: windData },
-        { name: '光伏', type: 'line', data: pvData },
-        { name: '负荷', type: 'line', data: loadData }
+        { name: '风电', type: 'line', smooth: true,
+          data: data.map(item => this.toNumber(item.wind_power, 0)) },
+        { name: '光伏', type: 'line', smooth: true,
+          data: data.map(item => this.toNumber(item.pv_power, 0)) },
+        { name: '负荷', type: 'line', smooth: true,
+          data: data.map(item => this.toNumber(item.load, 0)) }
       ]
     },
     updatePredictionChart(predictionData) {
@@ -424,11 +434,11 @@ export default {
             'Content-Type': 'application/json'
           }
         })
-        if (response && response.code === 200) {
+        if (response && response.data && response.data.code === 200) {
           this.$message.success('预测执行成功')
           this.loadPredictions()
         } else {
-          this.$message.error(response?.message || '预测失败')
+          this.$message.error(response?.data?.message || '预测失败')
         }
       } catch (error) {
         console.error('预测执行失败:', error)

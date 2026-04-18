@@ -111,36 +111,50 @@ def query_data():
 
 @data_bp.route('/api/data/latest', methods=['GET'])
 def get_latest_data():
-    """获取最新的24小时数据"""
+    """
+    获取最新的 24 条小时级数据，用于仪表盘实时功率曲线展示。
+
+    策略：取数据库中时间戳最新的 24 条记录（按时间升序返回），
+    不依赖系统时钟，确保即使数据未实时更新也能正常显示历史曲线。
+    可通过 ?limit=N 参数自定义返回条数（最大 168，即 7 天）。
+    """
     try:
-        # 获取最近24小时的数据
-        end_time = datetime.utcnow()
-        start_time = end_time - timedelta(hours=24)
-        
-        data = NewEnergyData.query.filter(
-            NewEnergyData.timestamp >= start_time,
-            NewEnergyData.timestamp <= end_time
-        ).order_by(NewEnergyData.timestamp.asc()).all()
-        
-        # 移除数据量检查，允许返回任意数量的数据
-        # if len(data) < 24:
-        #     return jsonify({'code': 400, 'message': f'数据不足，当前只有{len(data)}条记录'})
-        
-        # 转换为DataFrame格式，便于预测使用
-        result = []
-        for item in data:
-            result.append({
-                'timestamp': item.timestamp.isoformat(),
-                'wind_power': item.wind_power,
-                'pv_power': item.pv_power,
-                'load': item.load,
-                'temperature': item.temperature,
-                'irradiance': item.irradiance,
-                'wind_speed': item.wind_speed
-            })
-        
+        limit = request.args.get('limit', 24, type=int)
+        limit = max(1, min(limit, 168))   # 限制在 1-168 之间
+
+        # 取最新 limit 条，再按时间升序排列（用于图表从左到右展示）
+        subq = (
+            NewEnergyData.query
+            .order_by(NewEnergyData.timestamp.desc())
+            .limit(limit)
+            .subquery()
+        )
+        from sqlalchemy import select
+        from models.database import db
+        rows = (
+            db.session.execute(
+                select(NewEnergyData)
+                .where(NewEnergyData.id.in_(
+                    select(subq.c.id)
+                ))
+                .order_by(NewEnergyData.timestamp.asc())
+            )
+            .scalars()
+            .all()
+        )
+
+        result = [{
+            'timestamp':   item.timestamp.isoformat(),
+            'wind_power':  item.wind_power,
+            'pv_power':    item.pv_power,
+            'load':        item.load,
+            'temperature': item.temperature,
+            'irradiance':  item.irradiance,
+            'wind_speed':  item.wind_speed,
+        } for item in rows]
+
         return jsonify({'code': 200, 'data': result})
-        
+
     except Exception as e:
         return jsonify({'code': 500, 'message': f'查询错误: {str(e)}'})
 
