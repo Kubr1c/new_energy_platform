@@ -224,7 +224,8 @@ const availableModels = [
   { label: 'CNN-LSTM (时空耦合)', value: 'cnn_lstm' },
   { label: '标准 LSTM (单维向)', value: 'standard_lstm' },
   { label: 'GRU (门控循环替代)', value: 'gru' },
-  { label: 'Transformer (纯注意力焦点)', value: 'transformer' }
+  { label: 'Transformer (纯注意力焦点)', value: 'transformer' },
+  { label: 'Temporal Fusion Transformer (时序融合)', value: 'tft' }
 ]
 
 // 曲线对比控制
@@ -241,9 +242,10 @@ const targetLabelMap = {
 
 const chartTitle = computed(() => {
   const target = targetLabelMap[compareTarget.value] || compareTarget.value
-  const dateStr = groundTruth.value?.date_label || ''
-  if (currentMode.value === 'realtime' && dateStr) {
-    return `${target} 预测 vs 真实值对比（${dateStr}，实时数据，24步）`
+  if (currentMode.value === 'realtime') {
+    // 使用当前日期作为实时数据的日期
+    const currentDate = new Date().toISOString().split('T')[0]
+    return `${target} 预测 vs 真实值对比（${currentDate}，实时数据，24步）`
   }
   const modeStr = currentMode.value === 'realtime' ? '最新实时数据' : '历史测试集 2023-11-07'
   return `${target} 预测 vs 真实值对比（${modeStr}，24步）`
@@ -340,53 +342,132 @@ const renderRadarChart = () => {
   if (!radarChart) radarChart = echarts.init(radarChartRef.value)
   
   const seriesData = []
-  const maxMape = Math.max(...modelMetricsList.value.map(i => i.mape)) * 1.2 || 10
-  const maxRmse = Math.max(...modelMetricsList.value.map(i => i.rmse)) * 1.2 || 30
-  const maxMae = Math.max(...modelMetricsList.value.map(i => i.mae)) * 1.2 || 20
+  
+  // 收集所有指标值用于计算范围
+  const mapeValues = modelMetricsList.value.map(i => i.mape)
+  const rmseValues = modelMetricsList.value.map(i => i.rmse)
+  const maeValues = modelMetricsList.value.map(i => i.mae)
+  
+  // 计算每个指标的最小值和最大值
+  const minMape = Math.min(...mapeValues)
+  const maxMape = Math.max(...mapeValues)
+  const minRmse = Math.min(...rmseValues)
+  const maxRmse = Math.max(...rmseValues)
+  const minMae = Math.min(...maeValues)
+  const maxMae = Math.max(...maeValues)
+  
+  // 计算归一化分数 (0-100)，值越小越好，所以最高分给最小值
+  // 优化：使用更强的非线性变换，让数据点更分散
+  const calculateScore = (value, min, max) => {
+    if (max === min) return 50 // 所有值相同，给中等分数
+    // 基础分数计算
+    const baseScore = ((max - value) / (max - min)) * 100
+    // 使用更强的非线性变换，增强差异
+    return Math.pow(baseScore / 100, 0.5) * 100
+  }
   
   // ECharts default colors mapped to dynamic palette
-  const colors = ['#00f2fe', '#fbc2eb', '#f6d365', '#a18cd1', '#ff9a9e']
+  const colors = ['#00f2fe', '#fbc2eb', '#f6d365', '#a18cd1', '#ff9a9e', '#118ab2']
 
   modelMetricsList.value.forEach((item, idx) => {
+    // 计算每个指标的归一化分数
+    const mapeScore = calculateScore(item.mape, minMape, maxMape)
+    const rmseScore = calculateScore(item.rmse, minRmse, maxRmse)
+    const maeScore = calculateScore(item.mae, minMae, maxMae)
+    
     seriesData.push({
-      value: [maxMape - item.mape, maxRmse - item.rmse, maxMae - item.mae],
+      value: [mapeScore, rmseScore, maeScore],
       name: item.modelName,
-      lineStyle: { width: 2, color: colors[idx % colors.length] },
+      lineStyle: { width: 2.5, color: colors[idx % colors.length] },
       areaStyle: {
         color: new echarts.graphic.RadialGradient(0.5, 0.5, 1, [
-          { offset: 0, color: colors[idx % colors.length] + '22' },
-          { offset: 1, color: colors[idx % colors.length] + '88' }
-        ])
+          { offset: 0, color: colors[idx % colors.length] + '33' },
+          { offset: 1, color: colors[idx % colors.length] + '99' }
+        ]),
+        opacity: 0.7
       }
     })
   })
+  
+  // 坐标轴范围固定为0-100（归一化分数）
+  const axisMax = 100
+  const axisMin = 0
 
   // Normalize mapping for radar (since smaller metric is better, we inverted it above conceptually for radar spread)
   const option = {
     backgroundColor: '#0d1b2a',
-    tooltip: { trigger: 'item', backgroundColor: 'rgba(13,27,42,0.95)', borderColor: '#2a4a6b', textStyle: { color: '#e8f4fd' } },
+    tooltip: { 
+      trigger: 'item', 
+      backgroundColor: 'rgba(13,27,42,0.95)', 
+      borderColor: '#2a4a6b', 
+      textStyle: { color: '#e8f4fd' },
+      zIndex: 9999, // 提高z-index，确保显示在最上层
+      appendToBody: true, // 添加到body元素，避免被父容器遮挡
+      formatter: function(params) {
+        const modelName = params.seriesName === 'Metrics Radar' ? params.name : params.seriesName
+        const model = modelMetricsList.value.find(m => m.modelName === modelName)
+        if (!model) return `${modelName}<br/>${params.marker} ${params.seriesName}: ${params.value}`
+        
+        // 显示原始值和归一化分数
+        return `
+          <div style="font-weight: bold; margin-bottom: 5px; color: #38d9ff;">${modelName}</div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+            <span>MAPE:</span>
+            <span>${model.mape.toFixed(2)}%</span>
+            <span style="color: #56d4ff; font-weight: bold;">分数: ${params.value[0].toFixed(1)}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+            <span>RMSE:</span>
+            <span>${model.rmse.toFixed(2)}</span>
+            <span style="color: #56d4ff; font-weight: bold;">分数: ${params.value[1].toFixed(1)}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+            <span>MAE:</span>
+            <span>${model.mae.toFixed(2)}</span>
+            <span style="color: #56d4ff; font-weight: bold;">分数: ${params.value[2].toFixed(1)}</span>
+          </div>
+          <div style="margin-top: 8px; font-size: 11px; color: #8ab4d4; border-top: 1px solid #2a4a6b; padding-top: 5px;">
+            注: 分数范围0-100，100代表该指标最优（值最小），0代表最差（值最大）
+          </div>
+        `
+      }
+    },
     legend: {
       data: modelMetricsList.value.map(i => i.modelName),
-      bottom: 0,
+      bottom: '15px',
+      left: 'center',
       textStyle: { color: '#c8dff0', fontSize: 12 },
-      itemWidth: 18, itemHeight: 4
+      itemWidth: 20,
+      itemHeight: 8,
+      itemGap: 15
     },
     radar: {
       shape: 'circle',
+      radius: '85%',
+      center: ['50%', '52%'],
       indicator: [
-        { name: '100-MAPE', max: maxMape },
-        { name: '100-RMSE', max: maxRmse },
-        { name: '100-MAE',  max: maxMae  }
+        { name: 'MAPE', max: axisMax, min: axisMin },
+        { name: 'RMSE', max: axisMax, min: axisMin },
+        { name: 'MAE',  max: axisMax, min: axisMin }
       ],
-      splitNumber: 4,
-      axisName: { color: '#56d4ff', fontSize: 13, fontWeight: 600 },
+      splitNumber: 5, // 增加分割数量，让单位长度更细
+      axisName: { color: '#56d4ff', fontSize: 13, fontWeight: 700, padding: [5, 0] },
       splitLine: {
-        lineStyle: {
-          color: ['#0f2a3e', '#142f45', '#1a374f', '#203f5a']
+        lineStyle: [
+          { color: '#0f2a3e', width: 1 },
+          { color: '#142f45', width: 1 },
+          { color: '#1a374f', width: 1 },
+          { color: '#203f5a', width: 1 },
+          { color: '#2a4a6b', width: 1 } // 增加一条分割线
+        ]
+      },
+      splitArea: { 
+        show: true,
+        areaStyle: {
+          color: ['rgba(13,27,42,0.3)', 'rgba(14,31,51,0.3)', 'rgba(13,27,42,0.3)', 'rgba(14,31,51,0.3)', 'rgba(13,27,42,0.3)'] // 增加一个区域
         }
       },
-      splitArea: { areaStyle: { color: ['rgba(13,27,42,0.6)', 'rgba(14,31,51,0.6)', 'rgba(13,27,42,0.6)', 'rgba(14,31,51,0.6)'] } },
-      axisLine: { lineStyle: { color: '#1e3a5f' } }
+      axisLine: { lineStyle: { color: '#2a4a6b', width: 1.5 } }
     },
     series: [{
       name: 'Metrics Radar',
@@ -412,18 +493,37 @@ const renderWindLineChart = () => {
   // X 轴：优先使用真实时间戳（含年月日），回退到小时序列
   const rawLabels = groundTruth.value?.timestamps
   const hasTimestamps = Array.isArray(rawLabels) && rawLabels.length > 0
+  
   // 格式化：若包含年份（如 2026-05-20 00:00），只保留 MM-DD HH:MM 展示在轴上
   // 完整日期用于 tooltip，轴上显示精简版避免过密
-  const xLabels = hasTimestamps
-    ? rawLabels.map(t => {
-        // 输入格式: '2026-05-20 00:00' → 显示 '05-20 00:00'
-        return t.length >= 16 ? t.slice(5) : t
-      })
-    : Array.from({length: 24}, (_, i) => `${i}:00`)
-  // 完整标签用于 tooltip 和标题说明
-  const fullLabels = hasTimestamps ? rawLabels : xLabels
+  let xLabels, fullLabels
+  
+  if (currentMode.value === 'realtime' && hasTimestamps) {
+    // 实时模式下，使用当前日期替换时间戳中的日期部分
+    const currentDate = new Date().toISOString().split('T')[0]
+    xLabels = rawLabels.map(t => {
+      // 输入格式: '2026-05-20 00:00' → 显示 'MM-DD HH:MM'，其中 MM-DD 是当前日期
+      const timePart = t.split(' ')[1]
+      return `${currentDate.slice(5)} ${timePart}`
+    })
+    fullLabels = rawLabels.map(t => {
+      // 输入格式: '2026-05-20 00:00' → 显示 'YYYY-MM-DD HH:MM'，其中 YYYY-MM-DD 是当前日期
+      const timePart = t.split(' ')[1]
+      return `${currentDate} ${timePart}`
+    })
+  } else if (hasTimestamps) {
+    // 非实时模式或没有时间戳时，使用原始时间戳
+    xLabels = rawLabels.map(t => {
+      return t.length >= 16 ? t.slice(5) : t
+    })
+    fullLabels = rawLabels
+  } else {
+    // 没有时间戳时，使用小时序列
+    xLabels = Array.from({length: 24}, (_, i) => `${i}:00`)
+    fullLabels = xLabels
+  }
 
-  const modelColors = ['#00cfff', '#ff6b6b', '#ffd166', '#06d6a0', '#c77dff']
+  const modelColors = ['#00cfff', '#ff6b6b', '#ffd166', '#06d6a0', '#c77dff', '#118ab2']
   const seriesData = []
 
   // ---- 真实值曲线（白色实线 + 圆点）----
@@ -475,7 +575,7 @@ const renderWindLineChart = () => {
   })
 
   // 日期标签用于图例标题区显示
-  const dateLabel = groundTruth.value?.date_label || ''
+  const dateLabel = currentMode.value === 'realtime' ? new Date().toISOString().split('T')[0] : groundTruth.value?.date_label || ''
   const dateSuffix = dateLabel ? `  ${dateLabel}` : ''
 
   const option = {
@@ -848,7 +948,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 6px 32px rgba(56, 217, 255, 0.15);
 }
 
-.radar-card { flex: 1; min-width: 350px; }
+.radar-card { flex: 1; min-width: 450px; }
 .table-card { flex: 2; min-width: 500px; }
 .full-width { width: 100%; flex: 0 0 100%; }
 .half-width { flex: 1; min-width: 450px; }

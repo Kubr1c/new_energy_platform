@@ -17,6 +17,10 @@
           <el-icon><Location /></el-icon>
           <span>全局态势(大屏)</span>
         </el-menu-item>
+        <el-menu-item index="/integrated">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>集成监控大屏</span>
+        </el-menu-item>
         <el-menu-item index="/dashboard">
           <el-icon><Monitor /></el-icon>
           <span>仪表盘</span>
@@ -112,6 +116,7 @@ export default {
     currentPageTitle() {
       const titles = {
         '/map': '全局态势大屏',
+        '/integrated': '集成监控大屏',
         '/dashboard': '数据仪表盘',
         '/data': '预测元数据管理',
         '/predict': '多维度预测',

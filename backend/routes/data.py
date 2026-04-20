@@ -1,3 +1,8 @@
+"""
+数据相关API路由
+提供数据上传、查询和统计功能
+"""
+
 from flask import Blueprint, request, jsonify
 from models.database import db, NewEnergyData
 import pandas as pd
@@ -8,7 +13,20 @@ data_bp = Blueprint('data', __name__)
 
 @data_bp.route('/api/data/upload', methods=['POST'])
 def upload_data():
-    """上传CSV数据文件"""
+    """
+    上传CSV数据文件接口
+    
+    请求参数：
+        file: file - CSV数据文件
+    
+    返回值：
+        code: 200 - 上传成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        400 - 没有文件、没有选择文件、不支持的文件格式或缺少必需的列
+        500 - 数据处理错误
+    """
     if 'file' not in request.files:
         return jsonify({'code': 400, 'message': '没有文件'})
     
@@ -73,7 +91,29 @@ def upload_data():
 
 @data_bp.route('/api/data/query', methods=['GET'])
 def query_data():
-    """查询历史数据"""
+    """
+    查询历史数据接口
+    
+    查询参数：
+        start_time: str - 开始时间（可选，格式：ISO 8601）
+        end_time: str - 结束时间（可选，格式：ISO 8601）
+        limit: int - 返回记录数（可选，默认为100）
+    
+    返回值：
+        code: 200 - 查询成功
+        data: list - 数据列表
+            每个元素为数据记录字典
+                timestamp: str - 时间戳
+                wind_power: float - 风力发电量
+                pv_power: float - 光伏发电量
+                load: float - 负荷
+                temperature: float - 温度
+                irradiance: float - 辐照度
+                wind_speed: float - 风速
+    
+    错误处理：
+        500 - 查询错误
+    """
     try:
         # 获取查询参数
         start_time = request.args.get('start_time')
@@ -112,36 +152,66 @@ def query_data():
 @data_bp.route('/api/data/latest', methods=['GET'])
 def get_latest_data():
     """
-    获取最新的 24 条小时级数据，用于仪表盘实时功率曲线展示。
-
-    策略：取数据库中时间戳最新的 24 条记录（按时间升序返回），
-    不依赖系统时钟，确保即使数据未实时更新也能正常显示历史曲线。
-    可通过 ?limit=N 参数自定义返回条数（最大 168，即 7 天）。
+    获取最新的小时级数据接口
+    
+    功能：获取数据库中时间戳最新的记录，用于仪表盘实时功率曲线展示
+    
+    查询参数：
+        limit: int - 返回记录数（可选，默认为24，最大为168）
+    
+    返回值：
+        code: 200 - 获取成功
+        data: list - 数据列表（按时间升序排列）
+            每个元素为数据记录字典
+                timestamp: str - 时间戳
+                wind_power: float - 风力发电量
+                pv_power: float - 光伏发电量
+                load: float - 负荷
+                temperature: float - 温度
+                irradiance: float - 辐照度
+                wind_speed: float - 风速
+    
+    错误处理：
+        500 - 查询错误
     """
     try:
         limit = request.args.get('limit', 24, type=int)
         limit = max(1, min(limit, 168))   # 限制在 1-168 之间
 
-        # 取最新 limit 条，再按时间升序排列（用于图表从左到右展示）
-        subq = (
-            NewEnergyData.query
-            .order_by(NewEnergyData.timestamp.desc())
-            .limit(limit)
-            .subquery()
-        )
-        from sqlalchemy import select
-        from models.database import db
-        rows = (
-            db.session.execute(
-                select(NewEnergyData)
-                .where(NewEnergyData.id.in_(
-                    select(subq.c.id)
-                ))
-                .order_by(NewEnergyData.timestamp.asc())
-            )
-            .scalars()
-            .all()
-        )
+        # 获取当前时间
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        current_hour = now.replace(minute=0, second=0, microsecond=0)
+        
+        # 查询当前小时及之前的数据
+        # 首先尝试获取当前小时的数据
+        current_hour_data = NewEnergyData.query.filter(
+            NewEnergyData.timestamp >= current_hour,
+            NewEnergyData.timestamp < current_hour + timedelta(hours=1)
+        ).first()
+        
+        # 如果当前小时没有数据，获取前一个小时的数据
+        if not current_hour_data:
+            current_hour = current_hour - timedelta(hours=1)
+            current_hour_data = NewEnergyData.query.filter(
+                NewEnergyData.timestamp >= current_hour,
+                NewEnergyData.timestamp < current_hour + timedelta(hours=1)
+            ).first()
+        
+        # 确定要查询的时间范围
+        if current_hour_data:
+            # 从当前小时往前推 limit-1 小时
+            start_time = current_hour - timedelta(hours=limit-1)
+            end_time = current_hour + timedelta(hours=1)
+            
+            # 查询这个时间范围内的数据
+            rows = NewEnergyData.query.filter(
+                NewEnergyData.timestamp >= start_time,
+                NewEnergyData.timestamp < end_time
+            ).order_by(NewEnergyData.timestamp.asc()).all()
+        else:
+            # 如果没有找到任何数据，返回空列表
+            rows = []
 
         result = [{
             'timestamp':   item.timestamp.isoformat(),
@@ -160,7 +230,30 @@ def get_latest_data():
 
 @data_bp.route('/api/data/statistics', methods=['GET'])
 def get_statistics():
-    """获取数据统计信息"""
+    """
+    获取数据统计信息接口
+    
+    返回值：
+        code: 200 - 获取成功
+        data: dict - 统计信息
+            total_count: int - 数据总量
+            date_range: dict - 时间范围
+                start: str - 开始时间
+                end: str - 结束时间
+            statistics: dict - 统计数据
+                wind_power: dict - 风力发电统计
+                    avg: float - 平均值
+                    max: float - 最大值
+                pv_power: dict - 光伏发电统计
+                    avg: float - 平均值
+                    max: float - 最大值
+                load: dict - 负荷统计
+                    avg: float - 平均值
+                    max: float - 最大值
+    
+    错误处理：
+        500 - 统计错误
+    """
     try:
         # 获取数据总量
         total_count = NewEnergyData.query.count()
@@ -201,60 +294,3 @@ def get_statistics():
         
     except Exception as e:
         return jsonify({'code': 500, 'message': f'统计错误: {str(e)}'})
-
-
-@data_bp.route('/api/data/dataset_date', methods=['GET'])
-def get_dataset_date():
-    """
-    返回数据集中的最新日期信息，供前端替代 new Date() 使用。
-
-    返回：
-      latest_date      : 数据集最新记录的日期字符串 (YYYY-MM-DD)
-      latest_datetime  : 数据集最新记录的完整时间 (ISO 格式)
-      latest_hour      : 最新记录的小时数 (0-23)，供 SOC 曲线索引使用
-      earliest_date    : 数据集最早记录的日期字符串 (YYYY-MM-DD)
-      dispatch_default : 建议用于调度日期选择器的默认日期 (YYYY-MM-DD)
-                         取数据集内最后一个完整天（即最新日期往前一天，
-                         确保那一天有 24 条完整的小时级数据）
-    """
-    try:
-        latest = NewEnergyData.query.order_by(
-            NewEnergyData.timestamp.desc()
-        ).first()
-
-        earliest = NewEnergyData.query.order_by(
-            NewEnergyData.timestamp.asc()
-        ).first()
-
-        if not latest:
-            return jsonify({'code': 404, 'message': '数据库中没有数据'})
-
-        latest_date = latest.timestamp.date()
-        latest_hour = latest.timestamp.hour
-
-        # 调度默认日期：取最新日期当天，若当天数据不足24条则退一天
-        day_count = NewEnergyData.query.filter(
-            db.func.date(NewEnergyData.timestamp) == latest_date
-        ).count()
-
-        if day_count >= 24:
-            dispatch_default = latest_date.isoformat()
-        else:
-            # 退到前一天
-            from datetime import timedelta
-            prev_day = latest_date - timedelta(days=1)
-            dispatch_default = prev_day.isoformat()
-
-        return jsonify({
-            'code': 200,
-            'data': {
-                'latest_date':     latest_date.isoformat(),
-                'latest_datetime': latest.timestamp.isoformat(),
-                'latest_hour':     latest_hour,
-                'earliest_date':   earliest.timestamp.date().isoformat(),
-                'dispatch_default': dispatch_default,
-            }
-        })
-
-    except Exception as e:
-        return jsonify({'code': 500, 'message': f'获取数据集日期失败: {str(e)}'})

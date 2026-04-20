@@ -102,3 +102,78 @@ export function formatPercent(value, decimals = 2) {
   if (value === null || value === undefined) return '0%'
   return `${(Number(value) * 100).toFixed(decimals)}%`
 }
+
+/**
+ * 地图站点API
+ */
+
+/**
+ * 获取站点列表
+ * @param {string} adcode - 行政区划代码
+ * @param {string} level - 层级（nation, province, city）
+ * @param {string} status - 状态筛选（active, inactive, all）
+ * @returns {Promise} 站点列表
+ */
+export async function getSites(adcode = null, level = null, status = 'active') {
+  const params = {}
+  if (adcode) params.adcode = adcode
+  if (level) params.level = level
+  if (status && status !== 'all') params.status = status
+  return apiGet('/api/map/sites', params)
+}
+
+/**
+ * 获取单个站点详情
+ * @param {number} id - 站点ID
+ * @returns {Promise} 站点详情
+ */
+export async function getSite(id) {
+  return apiGet(`/api/map/sites/${id}`)
+}
+
+/**
+ * 创建新站点
+ * @param {object} siteData - 站点数据
+ * @returns {Promise} 创建结果
+ */
+export async function createSite(siteData) {
+  return apiPost('/api/map/sites', siteData)
+}
+
+/**
+ * 更新站点
+ * @param {number} id - 站点ID
+ * @param {object} updateData - 更新数据
+ * @returns {Promise} 更新结果
+ */
+export async function updateSite(id, updateData) {
+  return apiPut(`/api/map/sites/${id}`, updateData)
+}
+
+/**
+ * 删除站点
+ * @param {number} id - 站点ID
+ * @returns {Promise} 删除结果
+ */
+export async function deleteSite(id) {
+  return apiDelete(`/api/map/sites/${id}`)
+}
+
+/**
+ * 获取地图统计信息
+ * @returns {Promise} 统计信息
+ */
+export async function getMapStats() {
+  return apiGet('/api/map/stats')
+}
+
+/**
+ * 获取附近站点
+ * @param {number} lng - 经度
+ * @param {number} lat - 纬度
+ * @param {number} radius - 半径（公里），默认50
+ * @returns {Promise} 附近站点列表
+ */
+export async function getNearbySites(lng, lat, radius = 50) {
+  return apiGet('/api/map/nearby', { lng, lat, radius })
+}

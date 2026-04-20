@@ -1,3 +1,8 @@
+"""
+预测相关API路由
+提供新能源发电和负荷预测功能
+"""
+
 from flask import Blueprint, request, jsonify, current_app
 from models.database import db, PredictResult, NewEnergyData
 from models.predict import Predictor
@@ -98,7 +103,14 @@ def clear_metrics_cache(model_type=None):
         _predictor_cache.clear()
 
 def serialize_prediction_data(data):
-    """convert numpy arrays to Python lists for JSON serialization"""
+    """
+    将numpy数组转换为Python列表，以便JSON序列化
+    
+    参数：
+        data: 要序列化的数据
+    返回：
+        序列化后的数据
+    """
     if isinstance(data, dict):
         serialized = {}
         for key, value in data.items():
@@ -117,14 +129,28 @@ def serialize_prediction_data(data):
         return data
 
 def get_predictor(model_type='attention_lstm'):
-    """获取预测器实例（按 model_type 缓存）"""
+    """
+    获取预测器实例（按 model_type 缓存）
+    
+    参数：
+        model_type: 模型类型，默认为 'attention_lstm'
+    返回：
+        Predictor 实例
+    """
     global _predictor_cache
     if model_type not in _predictor_cache:
         _predictor_cache[model_type] = Predictor(model_type=model_type)
     return _predictor_cache[model_type]
 
 def _build_recent_data_with_padding(required_hours=24):
-    """获取数据库最新数据，不足 required_hours 时使用现有数据。"""
+    """
+    获取数据库最新数据，不足 required_hours 时使用现有数据
+    
+    参数：
+        required_hours: 需要的小时数，默认为24
+    返回：
+        (DataFrame, int) - 数据和实际数据条数
+    """
     # 获取数据库中最新的数据
     db_data = NewEnergyData.query.order_by(NewEnergyData.timestamp.desc()).limit(required_hours).all()
     
@@ -148,7 +174,16 @@ def _build_recent_data_with_padding(required_hours=24):
 
 @predict_bp.route('/api/predict/models', methods=['GET'])
 def get_available_models():
-    """获取所有可用的预测模型列表"""
+    """
+    获取所有可用的预测模型列表
+    
+    返回值：
+        code: 200 - 获取成功
+        data: list - 模型列表
+    
+    错误处理：
+        500 - 获取模型列表失败
+    """
     try:
         models = list_available_models()
         return jsonify({'code': 200, 'data': models})
@@ -157,7 +192,28 @@ def get_available_models():
 
 @predict_bp.route('/api/predict/single', methods=['POST'])
 def predict_single():
-    """单步预测"""
+    """
+    单步预测接口
+    
+    请求参数：
+        model_type: str - 模型类型（可选，默认为 'attention_lstm'）
+        data: list - 输入数据（可选，若不提供则使用数据库最新数据）
+    
+    返回值：
+        code: 200 - 预测成功
+        data: dict - 预测结果
+            prediction: dict - 预测值
+            timestamp: str - 预测时间
+            id: int - 预测记录ID
+            model_type: str - 使用的模型类型
+            input_count: int - 输入数据条数
+            original_count: int - 原始数据条数
+            metrics: dict - 模型评估指标
+    
+    错误处理：
+        400 - 没有可用数据
+        500 - 预测错误
+    """
     try:
         # handle empty JSON request
         try:
@@ -222,7 +278,28 @@ def predict_single():
 
 @predict_bp.route('/api/predict/batch', methods=['POST'])
 def predict_batch():
-    """批量预测（未来24小时）"""
+    """
+    批量预测接口（未来24小时）
+    
+    请求参数：
+        model_type: str - 模型类型（可选，默认为 'attention_lstm'）
+    
+    返回值：
+        code: 200 - 预测成功
+        data: dict - 预测结果
+            predictions: dict - 未来24小时的预测值
+            start_time: str - 预测开始时间
+            horizon: int - 预测时长（24小时）
+            id: int - 预测记录ID
+            model_type: str - 使用的模型类型
+            input_count: int - 输入数据条数
+            original_count: int - 原始数据条数
+            metrics: dict - 模型评估指标
+    
+    错误处理：
+        400 - 没有可用数据
+        500 - 批量预测错误
+    """
     try:
         # handle empty JSON request
         try:
@@ -246,8 +323,12 @@ def predict_batch():
         current_data = recent_data.copy()
         
         for hour in range(24):
-            # execute single step prediction
-            pred = predictor_instance.predict(current_data)
+            # 计算预测的小时数
+            next_timestamp = current_data.iloc[-1]['timestamp'] + timedelta(hours=1)
+            predict_hour = next_timestamp.hour
+            
+            # execute single step prediction with predict_hour
+            pred = predictor_instance.predict(current_data, predict_hour)
             
             # save prediction results
             for key in predictions.keys():
@@ -266,7 +347,6 @@ def predict_batch():
             # 更新数据集，将预测值作为新的数据点
             # 这里需要构造下一个时间步的特征数据
             # 简化处理：使用预测值，其他特征使用最近值或简单外推
-            next_timestamp = current_data.iloc[-1]['timestamp'] + timedelta(hours=1)
             
             # get scalar values for next_row
             wind_power_val = pred['wind_power']
@@ -289,13 +369,25 @@ def predict_batch():
             elif hasattr(load_val, 'tolist') and len(load_val.tolist()) == 1:
                 load_val = load_val.tolist()[0]
             
+            # 为了更好的光伏预测，我们需要根据时间调整辐照度
+            # 白天辐照度高，夜间辐照度为0
+            if 6 <= predict_hour < 18:
+                # 白天：根据时间调整辐照度
+                irradiance_val = current_data.iloc[-1]['irradiance']
+                if irradiance_val == 0:
+                    # 如果当前辐照度为0，设置一个合理的白天值
+                    irradiance_val = 500.0
+            else:
+                # 夜间：辐照度为0
+                irradiance_val = 0.0
+            
             next_row = {
                 'timestamp': next_timestamp,
                 'wind_power': wind_power_val,
                 'pv_power': pv_power_val,
                 'load': load_val,
                 'temperature': current_data.iloc[-1]['temperature'],  # keep unchanged
-                'irradiance': current_data.iloc[-1]['irradiance'],    # keep unchanged
+                'irradiance': irradiance_val,    # 根据时间调整辐照度
                 'wind_speed': current_data.iloc[-1]['wind_speed']      # keep unchanged
             }
             
@@ -340,7 +432,29 @@ def predict_batch():
 
 @predict_bp.route('/api/predict/history', methods=['GET'])
 def get_predict_history():
-    """获取预测历史"""
+    """
+    获取预测历史接口
+    
+    查询参数：
+        limit: int - 返回记录数（可选，默认为10）
+        type: str - 预测类型（可选，默认为'multi'）
+    
+    返回值：
+        code: 200 - 获取成功
+        data: list - 预测历史记录
+            每个元素为预测记录字典
+                id: int - 预测记录ID
+                predict_type: str - 预测类型
+                model_type: str - 模型类型
+                start_time: str - 预测开始时间
+                horizon: int - 预测时长
+                data: dict - 预测数据
+                mape: float - 平均绝对百分比误差
+                created_at: str - 创建时间
+    
+    错误处理：
+        500 - 查询错误
+    """
     try:
         # 获取查询参数
         limit = request.args.get('limit', 10, type=int)
@@ -371,7 +485,23 @@ def get_predict_history():
 
 @predict_bp.route('/api/predict/evaluate', methods=['POST'])
 def evaluate_prediction():
-    """评估预测准确性"""
+    """
+    评估预测准确性接口
+    
+    请求参数：
+        predict_id: int - 预测记录ID
+    
+    返回值：
+        code: 200 - 评估成功
+        data: dict - 评估结果
+            mape: dict - 各指标的平均绝对百分比误差
+            overall_mape: float - 总体平均绝对百分比误差
+    
+    错误处理：
+        400 - 缺少预测ID或实际数据不足
+        404 - 预测结果不存在
+        500 - 评估错误
+    """
     try:
         data = request.json
         predict_id = data.get('predict_id')
@@ -430,38 +560,65 @@ def evaluate_prediction():
 
 @predict_bp.route('/api/predict/<int:predict_id>', methods=['DELETE'])
 def delete_prediction(predict_id):
-    """delete prediction result"""
+    """
+    删除预测结果接口
+    
+    路径参数：
+        predict_id: int - 预测记录ID
+    
+    返回值：
+        code: 200 - 删除成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        404 - 预测结果不存在
+        500 - 删除错误
+    """
     try:
         # get prediction result
         prediction = PredictResult.query.get(predict_id)
         if not prediction:
-            return jsonify({'code': 404, 'message': 'prediction result not found'})
+            return jsonify({'code': 404, 'message': '预测结果不存在'})
         
         # delete prediction
         db.session.delete(prediction)
         db.session.commit()
         
-        return jsonify({'code': 200, 'message': 'prediction deleted successfully'})
+        return jsonify({'code': 200, 'message': '预测结果删除成功'})
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'code': 500, 'message': f'deletion error: {str(e)}'})
+        return jsonify({'code': 500, 'message': f'删除错误: {str(e)}'})
 
 @predict_bp.route('/api/predict/batch_delete', methods=['POST'])
 def batch_delete_predictions():
-    """batch delete prediction results"""
+    """
+    批量删除预测结果接口
+    
+    请求参数：
+        predict_ids: list - 预测记录ID列表
+    
+    返回值：
+        code: 200 - 删除成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        400 - 缺少预测ID列表
+        404 - 没有找到预测结果
+        500 - 批量删除错误
+    """
     try:
         data = request.json
         predict_ids = data.get('predict_ids', [])
         
         if not predict_ids:
-            return jsonify({'code': 400, 'message': 'missing prediction ids'})
+            return jsonify({'code': 400, 'message': '缺少预测ID列表'})
         
         # get predictions to delete
         predictions = PredictResult.query.filter(PredictResult.id.in_(predict_ids)).all()
         
         if not predictions:
-            return jsonify({'code': 404, 'message': 'no prediction results found'})
+            return jsonify({'code': 404, 'message': '没有找到预测结果'})
         
         # delete predictions
         for prediction in predictions:
@@ -471,12 +628,12 @@ def batch_delete_predictions():
         
         return jsonify({
             'code': 200, 
-            'message': f'successfully deleted {len(predictions)} prediction results'
+            'message': f'成功删除 {len(predictions)} 条预测结果'
         })
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'code': 500, 'message': f'batch deletion error: {str(e)}'})
+        return jsonify({'code': 500, 'message': f'批量删除错误: {str(e)}'})
 
 
 @predict_bp.route('/api/predict/reload_models', methods=['POST'])
@@ -488,6 +645,13 @@ def reload_models():
     请求体（可选）:
         {"model_type": "attention_lstm"}   -- 只刷新指定模型
         {}                                 -- 刷新全部模型（默认）
+    
+    返回值：
+        code: 200 - 缓存清除成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        500 - 缓存清除失败
     """
     try:
         data = request.json or {}

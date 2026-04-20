@@ -3,6 +3,8 @@
 """
 模型训练模块
 
+本模块提供了模型训练的核心功能，包括数据加载、预处理、模型训练和评估等。
+
 公开接口：
   train_all_models(app)          -- 一次性训练全部 5 个模型（推荐入口）
   train_model_on_db(...)         -- 训练单个模型
@@ -10,11 +12,36 @@
 
 兼容性接口（旧版，保留供向后兼容）：
   train_model(data_path, ...)    -- 原始 CSV/数据库训练函数
+
+设计特点：
+- 数据按时间顺序切分，确保无数据泄露
+- 支持自动设备选择（GPU/CPU）
+- 实现早停机制，防止过拟合
+- 提供详细的训练和评估日志
+- 批量训练多个模型并生成对比报告
 """
 
+# 导入必要的模块
 import os
 import sys
 import datetime
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+import pandas as pd
+
+# 确保 backend 目录在 sys.path 中
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
+# 导入自定义模块
+from models.model_registry import get_model  # 模型注册表
+from preprocessing.data_utils import DataPreprocessor  # 数据预处理器
+from models.database import NewEnergyData  # 数据库模型
 
 import torch
 import torch.nn as nn
@@ -36,7 +63,7 @@ from models.database import NewEnergyData
 # 常量
 # ---------------------------------------------------------------------------
 
-ALL_MODEL_TYPES = ['attention_lstm', 'standard_lstm', 'gru', 'cnn_lstm', 'transformer']
+ALL_MODEL_TYPES = ['attention_lstm', 'standard_lstm', 'gru', 'cnn_lstm', 'transformer', 'tft']
 
 FEATURES  = ['wind_power', 'pv_power', 'load', 'temperature', 'irradiance', 'wind_speed']
 TARGETS   = ['wind_power', 'pv_power', 'load']
@@ -54,12 +81,19 @@ _DB_YEAR_END   = datetime.datetime(2024, 1, 1)   # 不含
 
 def load_split_from_database(app):
     """
-    从数据库加载 2023 年全年数据，按时间顺序切分为三段。
+    从数据库加载 2023 年全年数据，按时间顺序切分为三段
 
     切分比例：70% train / 15% val / 15% test
-    切分方式：严格按时间先后顺序，确保无数据泄露。
+    切分方式：严格按时间先后顺序，确保无数据泄露
 
-    返回：(df_train, df_val, df_test)，每段均含 FEATURES 列及 timestamp。
+    Args:
+        app: Flask app 实例，用于访问数据库
+
+    Returns:
+        tuple: (df_train, df_val, df_test)，每段均含 FEATURES 列及 timestamp
+
+    Raises:
+        ValueError: 如果数据库中没有 2023 年训练数据
     """
     with app.app_context():
         records = (
@@ -115,7 +149,16 @@ def load_split_from_database(app):
 # ---------------------------------------------------------------------------
 
 def _build_sequences(scaled_values, target_indices):
-    """将归一化后的二维数组切成 (X, y) 样本对。"""
+    """
+    将归一化后的二维数组切成 (X, y) 样本对
+
+    Args:
+        scaled_values: np.ndarray, 归一化后的特征数据
+        target_indices: list, 目标列在特征中的索引
+
+    Returns:
+        tuple: (X, y)，其中 X 是输入序列，y 是目标值
+    """
     X, y = [], []
     for i in range(len(scaled_values) - INPUT_LEN - OUTPUT_LEN + 1):
         X.append(scaled_values[i: i + INPUT_LEN])
@@ -132,12 +175,19 @@ def _build_sequences(scaled_values, target_indices):
 
 def evaluate_on_test(model, preprocessor, df_context_tail, df_test, device):
     """
-    在测试段做滑窗单步预测评估，打印并返回 per_target + overall 指标。
+    在测试段做滑窗单步预测评估，打印并返回指标
 
-    df_context_tail : val 段末尾 INPUT_LEN 行，作为 test 第一步的初始上下文。
-    df_test         : 完整测试段 DataFrame。
+    Args:
+        model: nn.Module, 训练好的模型
+        preprocessor: DataPreprocessor, 数据预处理器
+        df_context_tail: pd.DataFrame, val 段末尾 INPUT_LEN 行，作为 test 第一步的初始上下文
+        df_test: pd.DataFrame, 完整测试段 DataFrame
+        device: torch.device, 计算设备
+
+    Returns:
+        dict: 包含 per_target 和 overall 指标的字典
     """
-    from models.metrics import compute_all
+    from models.metrics import compute_all  # 导入评估指标计算函数
 
     model.eval()
     preds   = {col: [] for col in TARGETS}
@@ -220,13 +270,22 @@ def train_model_on_db(df_train, df_val, df_test,
                       batch_size=32,
                       lr=0.001):
     """
-    在给定的 train/val/test 三段上训练并评估单个模型。
+    在给定的 train/val/test 三段上训练并评估单个模型
 
-    fit_scaler=True  : 用 df_train 重新拟合并保存 scaler.pkl（覆盖旧文件）
-    fit_scaler=False : 加载已有 scaler.pkl，复用同一套归一化参数
+    Args:
+        df_train: pd.DataFrame, 训练数据
+        df_val: pd.DataFrame, 验证数据
+        df_test: pd.DataFrame, 测试数据
+        model_type: str, 模型类型
+        fit_scaler: bool, 是否重新拟合 scaler
+        epochs: int, 训练轮数
+        batch_size: int, 批次大小
+        lr: float, 学习率
 
-    返回 (model, train_history, test_metrics)
+    Returns:
+        tuple: (model, train_history, test_metrics)
     """
+    # 自动选择设备：优先使用 GPU，否则使用 CPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # ---- 1. 预处理 ----
@@ -303,6 +362,7 @@ def train_model_on_db(df_train, df_val, df_test,
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad()
+            # 对于TFT模型，只传递x参数
             loss = criterion(model(xb), yb)
             loss.backward()
             optimizer.step()
@@ -360,13 +420,21 @@ def train_model_on_db(df_train, df_val, df_test,
 def train_all_models(app, epochs=100, batch_size=32, lr=0.001,
                      model_types=None):
     """
-    一次性训练全部（或指定的）预测模型，共享同一个 scaler。
+    一次性训练全部（或指定的）预测模型，共享同一个 scaler
 
     - 第一个模型 fit_scaler=True（重新拟合并覆盖 scaler.pkl）
     - 后续模型 fit_scaler=False（复用同一套归一化参数）
     - 训练完成后打印 5 个模型的汇总对比表
 
-    返回 {model_type: test_metrics_dict}
+    Args:
+        app: Flask app 实例
+        epochs: int, 训练轮数
+        batch_size: int, 批次大小
+        lr: float, 学习率
+        model_types: list, 要训练的模型类型列表
+
+    Returns:
+        dict: {model_type: test_metrics_dict}
     """
     if model_types is None:
         model_types = ALL_MODEL_TYPES
@@ -429,7 +497,18 @@ def train_all_models(app, epochs=100, batch_size=32, lr=0.001,
 # ---------------------------------------------------------------------------
 
 def resolve_data_path(data_path):
-    """解析训练数据路径（兼容旧调用）。"""
+    """
+    解析训练数据路径（兼容旧调用）
+
+    Args:
+        data_path: str, 数据路径
+
+    Returns:
+        str: 解析后的绝对路径
+
+    Raises:
+        FileNotFoundError: 如果找不到数据文件
+    """
     if os.path.isabs(data_path) and os.path.exists(data_path):
         return data_path
     cwd = os.path.abspath(data_path)
@@ -447,7 +526,19 @@ def resolve_data_path(data_path):
 
 
 def load_data_from_database(app, limit=None):
-    """从数据库获取全量训练数据（兼容旧调用，推荐改用 load_split_from_database）。"""
+    """
+    从数据库获取全量训练数据（兼容旧调用，推荐改用 load_split_from_database）
+
+    Args:
+        app: Flask app 实例
+        limit: int, 限制返回数据条数
+
+    Returns:
+        pd.DataFrame: 训练数据
+
+    Raises:
+        ValueError: 如果数据库中没有训练数据
+    """
     with app.app_context():
         q = NewEnergyData.query.order_by(NewEnergyData.timestamp.asc())
         if limit:
@@ -470,8 +561,21 @@ def train_model(data_path=None, input_len=24, output_len=1,
                 epochs=100, batch_size=32, lr=0.001,
                 app=None, model_type='attention_lstm'):
     """
-    原始训练函数（兼容旧调用）。
-    推荐改用 train_all_models(app) 或 train_model_on_db(...)。
+    原始训练函数（兼容旧调用）
+    推荐改用 train_all_models(app) 或 train_model_on_db(...)
+
+    Args:
+        data_path: str, 数据路径或 'database'
+        input_len: int, 输入序列长度
+        output_len: int, 输出序列长度
+        epochs: int, 训练轮数
+        batch_size: int, 批次大小
+        lr: float, 学习率
+        app: Flask app 实例
+        model_type: str, 模型类型
+
+    Returns:
+        tuple: (model, preprocessor, history)
     """
     if data_path and data_path == 'database':
         if app is None:
@@ -578,6 +682,7 @@ def train_model(data_path=None, input_len=24, output_len=1,
 
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
+    # 主函数：创建应用实例并训练所有模型
     from app import create_app
     app = create_app()
     train_all_models(app)

@@ -166,22 +166,10 @@ export default {
         { name: '数据库', value: '正常', icon: 'Coin', color: '#67C23A', tagType: 'success' },
         { name: 'API服务', value: '正常', icon: 'Connection', color: '#67C23A', tagType: 'success' }
       ],
-      recentDispatches: [],
-      // 数据集最新记录的小时（由 mounted 从 /api/data/dataset_date 获取）
-      // 用于替代 new Date().getHours()，确保 SOC 索引与数据集时间对齐
-      datasetHour: 6
+      recentDispatches: []
     }
   },
-  async mounted() {
-    // 先获取数据集时间，再加载依赖时间的组件
-    try {
-      const res = await this.$http.get('/api/data/dataset_date')
-      if (res.data && res.data.code === 200) {
-        this.datasetHour = res.data.data.latest_hour
-      }
-    } catch (e) {
-      // 接口失败时保持默认值 6
-    }
+  mounted() {
     this.loadLatestData()
     this.loadRecentDispatches()
     this.loadPredictions()
@@ -238,19 +226,18 @@ export default {
       const socCurve = Array.isArray(record.soc_curve) ? record.soc_curve : []
       const chargePlan = Array.isArray(record.charge_plan) ? record.charge_plan : []
       const dischargePlan = Array.isArray(record.discharge_plan) ? record.discharge_plan : []
-      // 使用数据集最新记录的小时，而非系统当前时间
-      const datasetHour = this.datasetHour
+      const currentHour = new Date().getHours()
 
       if (socCurve.length > 0) {
-        const socRaw = socCurve[datasetHour] ?? socCurve[socCurve.length - 1]
+        const socRaw = socCurve[currentHour] ?? socCurve[socCurve.length - 1]
         this.socValue = Number(this.normalizeSocPercent(socRaw).toFixed(1))
       }
       if (chargePlan.length > 0) {
-        const chargeRaw = chargePlan[datasetHour] ?? chargePlan[chargePlan.length - 1]
+        const chargeRaw = chargePlan[currentHour] ?? chargePlan[chargePlan.length - 1]
         this.chargePower = Number(this.toNumber(chargeRaw, 0).toFixed(2))
       }
       if (dischargePlan.length > 0) {
-        const dischargeRaw = dischargePlan[datasetHour] ?? dischargePlan[dischargePlan.length - 1]
+        const dischargeRaw = dischargePlan[currentHour] ?? dischargePlan[dischargePlan.length - 1]
         this.dischargePower = Number(this.toNumber(dischargeRaw, 0).toFixed(2))
       }
     },
@@ -398,9 +385,11 @@ export default {
         return
       }
 
-      // X 轴使用实际时间戳（格式：MM-DD HH:mm）
-      const labels = data.map(item => {
-        const d = new Date(item.timestamp)
+      // X 轴使用当前时间生成标签（格式：MM-DD HH:mm）
+      const labels = data.map((_, index) => {
+        const now = new Date()
+        // 生成从当前时间往前推的数据点时间
+        const d = new Date(now.getTime() - (data.length - 1 - index) * 60 * 60 * 1000)
         const mm = String(d.getMonth() + 1).padStart(2, '0')
         const dd = String(d.getDate()).padStart(2, '0')
         const hh = String(d.getHours()).padStart(2, '0')
@@ -428,12 +417,56 @@ export default {
         return
       }
       
-      const sourceData = predictionData.wind_power ?? predictionData.pv_power ?? predictionData.load ?? []
-      const normalizedData = this.normalizeChartData(sourceData).map(item => this.toNumber(item, 0))
+      // 获取预测数据
+      const predictData = predictionData.wind_power ?? predictionData.pv_power ?? predictionData.load ?? []
+      const normalizedPredictData = this.normalizeChartData(predictData).map(item => this.toNumber(item, 0))
       
+      // 尝试从最新数据中获取实际值
+      // 这里我们使用一个简单的方法：如果有最新数据，就使用最近24小时的数据
+      // 否则使用空数据
+      let actualData = []
+      try {
+        // 从API获取最新24小时数据
+        this.$http.get('/api/data/latest', { params: { limit: 24 } })
+          .then(response => {
+            if (response && response.data && response.data.code === 200 && Array.isArray(response.data.data)) {
+              const latestData = response.data.data
+              if (latestData.length > 0) {
+                // 按时间升序排列
+                const sortedData = [...latestData].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                // 获取最后24个数据点
+                const recentData = sortedData.slice(-24)
+                // 提取实际值（使用风电功率作为示例，可根据需要调整）
+                actualData = recentData.map(item => this.toNumber(item.wind_power || item.pv_power || item.load || 0, 0))
+                // 更新图表
+                this.predictionChartOption.series = [
+                  { name: '实际', type: 'line', data: actualData },
+                  { name: '预测', type: 'line', data: normalizedPredictData }
+                ]
+              }
+            }
+          })
+          .catch(error => {
+            console.error('获取实际数据失败:', error)
+            // 出错时使用空数据作为实际值
+            this.predictionChartOption.series = [
+              { name: '实际', type: 'line', data: [] },
+              { name: '预测', type: 'line', data: normalizedPredictData }
+            ]
+          })
+      } catch (error) {
+        console.error('获取实际数据失败:', error)
+        // 出错时使用空数据作为实际值
+        this.predictionChartOption.series = [
+          { name: '实际', type: 'line', data: [] },
+          { name: '预测', type: 'line', data: normalizedPredictData }
+        ]
+      }
+      
+      // 先设置预测数据，实际数据会在API请求完成后更新
       this.predictionChartOption.series = [
-        { name: '实际', type: 'line', data: normalizedData },
-        { name: '预测', type: 'line', data: normalizedData }
+        { name: '实际', type: 'line', data: [] },
+        { name: '预测', type: 'line', data: normalizedPredictData }
       ]
     },
     refreshPowerData() {

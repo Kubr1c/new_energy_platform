@@ -68,14 +68,23 @@
           <el-col :span="6">
             <el-statistic title="总数据量" :value="statistics.total_count" />
           </el-col>
-          <el-col :span="6">
+          <el-col :span="6" v-if="statistics.statistics && statistics.statistics.wind_power">
             <el-statistic title="平均风电功率" :value="statistics.statistics.wind_power.avg" suffix="MW" />
           </el-col>
-          <el-col :span="6">
+          <el-col :span="6" v-else-if="!statistics.statistics">
+            <el-statistic title="平均风电功率" :value="0" suffix="MW" />
+          </el-col>
+          <el-col :span="6" v-if="statistics.statistics && statistics.statistics.pv_power">
             <el-statistic title="平均光伏功率" :value="statistics.statistics.pv_power.avg" suffix="MW" />
           </el-col>
-          <el-col :span="6">
+          <el-col :span="6" v-else-if="!statistics.statistics">
+            <el-statistic title="平均光伏功率" :value="0" suffix="MW" />
+          </el-col>
+          <el-col :span="6" v-if="statistics.statistics && statistics.statistics.load">
             <el-statistic title="平均负荷" :value="statistics.statistics.load.avg" suffix="MW" />
+          </el-col>
+          <el-col :span="6" v-else-if="!statistics.statistics">
+            <el-statistic title="平均负荷" :value="0" suffix="MW" />
           </el-col>
         </el-row>
       </div>

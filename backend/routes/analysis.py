@@ -1,3 +1,8 @@
+"""
+分析相关API路由
+提供模型比较和算法比较功能
+"""
+
 from flask import Blueprint, request, jsonify, current_app
 from models.database import db, PredictResult, StrategyConfig, NewEnergyData
 from optimization.solver import solve_dispatch
@@ -16,7 +21,14 @@ analysis_bp = Blueprint('analysis', __name__)
 
 
 def _to_scalar(v):
-    """将 numpy 标量/单元素数组统一转为 Python float。"""
+    """
+    将 numpy 标量/单元素数组统一转为 Python float
+    
+    参数：
+        v: 要转换的值
+    返回：
+        float - 转换后的值
+    """
     if hasattr(v, 'item'):
         return v.item()
     if hasattr(v, 'tolist'):
@@ -27,7 +39,7 @@ def _to_scalar(v):
 
 def _get_realtime_ground_truth_and_context(n_context=24, n_future=24):
     """
-    实时模式：从数据库取最新的连续数据。
+    实时模式：从数据库取最新的连续数据
 
     策略：
       - 从数据库取最新的 (n_context + n_future) 条连续小时级记录
@@ -83,7 +95,14 @@ def _get_realtime_ground_truth_and_context(n_context=24, n_future=24):
 
 def _get_realtime_predictions(predictor, ctx_df: pd.DataFrame, n_future=24) -> dict:
     """
-    实时模式：基于上下文 DataFrame 预测后续 n_future 步。
+    实时模式：基于上下文 DataFrame 预测后续 n_future 步
+    
+    参数：
+        predictor: 预测器实例
+        ctx_df: 上下文数据
+        n_future: 预测步数
+    返回：
+        dict - 预测结果
     """
     predictions = {'wind_power': [], 'pv_power': [], 'load': []}
     current_data = ctx_df.copy()
@@ -200,16 +219,25 @@ def _get_testset_predictions(predictor, n_steps=24):
 @analysis_bp.route('/api/analysis/model_compare', methods=['POST'])
 def model_compare():
     """
-    比较多个预测模型的预测序列与真实值，支持两种模式：
-
+    比较多个预测模型的预测序列与真实值接口
+    
     请求参数:
         {
-            "models": ["attention_lstm", "cnn_lstm", ...],
-            "mode":   "realtime" | "testset"  （默认 "realtime"）
+            "models": ["attention_lstm", "cnn_lstm", ...],  # 要比较的模型列表
+            "mode":   "realtime" | "testset"  （默认 "realtime"）  # 比较模式
         }
-
-    realtime: 用最新 24h 作上下文，预测后续 24h，与数据库真实录入值配对
-    testset : 固定 2023-11-07 历史片段，用于模型横向对比
+    
+    返回值：
+        code: 200 - 比较成功
+        data: dict - 比较结果
+            results: dict - 各模型的预测结果和指标
+            ground_truth: dict - 真实值
+            mode: str - 比较模式
+            context_info: str - 上下文信息
+    
+    错误处理：
+        400 - 数据库中没有足够数据
+        500 - 模型比较失败
     """
     try:
         req       = request.json or {}
@@ -292,8 +320,29 @@ def model_compare():
 @analysis_bp.route('/api/analysis/algorithm_compare', methods=['POST'])
 def algorithm_compare():
     """
-    比较不同优化算法（PSO，AWPSO，GA）对相同预测数据的调度结果
-    请求参数: {"algorithms": ["awpso", "pso", "ga"], "date": "2023-01-01"}
+    比较不同优化算法（PSO，AWPSO，GA）对相同预测数据的调度结果接口
+    
+    请求参数:
+        {
+            "algorithms": ["awpso", "pso", "ga"],  # 要比较的算法列表
+            "ess_params": {}  # 储能参数（可选）
+        }
+    
+    返回值：
+        code: 200 - 比较成功
+        data: dict - 各算法的调度结果
+            每个算法的结果包含：
+                charge_plan: list - 充电计划
+                discharge_plan: list - 放电计划
+                soc_curve: list - 荷电状态曲线
+                abandon_rate: float - 弃风弃光率
+                total_cost: float - 总成本
+                fitness_history: list - 适应度历史
+                time_cost: float - 计算时间
+    
+    错误处理：
+        400 - 没有可用的预测数据
+        500 - 算法比较失败
     """
     try:
         data = request.json or {}

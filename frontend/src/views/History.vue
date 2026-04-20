@@ -121,8 +121,6 @@
           :total="total"
           :background="true"
           layout="total, sizes, prev, pager, next, jumper"
-          :page-size.sync="pageSize"
-          :current-page.sync="currentPage"
           @size-change="handleSizeChange"
           @current-change="handleCurrentChange"
         />

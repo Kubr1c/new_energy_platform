@@ -1,3 +1,8 @@
+"""
+调度相关API路由
+提供储能系统优化调度功能
+"""
+
 from flask import Blueprint, request, jsonify
 from models.database import db, DispatchResult, PredictResult, StrategyConfig
 from optimization.solver import solve_dispatch, solve_dispatch_multi_objective
@@ -8,7 +13,39 @@ dispatch_bp = Blueprint('dispatch', __name__)
 
 @dispatch_bp.route('/api/dispatch/exec', methods=['POST'])
 def exec_dispatch():
-    """执行优化调度"""
+    """
+    执行优化调度接口
+    
+    请求参数：
+        start_date: str - 调度开始日期（格式：YYYY-MM-DD）
+        forecasts: dict - 预测数据（可选）
+            wind_power: list - 风力发电预测值
+            pv_power: list - 光伏发电预测值
+            load: list - 负荷预测值
+        price_buy: list - 购电价格（可选）
+        price_sell: list - 售电价格（可选）
+        ess_params: dict - 储能参数（可选）
+        algorithm: str - 优化算法（可选，默认为 'awpso'）
+        weights: list - 目标权重（可选，格式：[w_cost, w_abandon, w_life]）
+    
+    返回值：
+        code: 200 - 调度执行成功
+        data: dict - 调度结果
+            dispatch_id: int - 调度记录ID
+            schedule_date: str - 调度日期
+            charge_plan: list - 充电计划
+            discharge_plan: list - 放电计划
+            soc_curve: list - 荷电状态曲线
+            abandon_plan: list - 弃风弃光计划
+            abandon_rate: float - 弃风弃光率
+            total_cost: float - 总成本
+            objectives: dict - 各目标值
+            constraint_violation: dict - 约束违反情况
+    
+    错误处理：
+        400 - 没有可用的预测数据或预测数据格式错误
+        500 - 调度执行错误
+    """
     try:
         data = request.json
         
@@ -100,7 +137,35 @@ def exec_dispatch():
 
 @dispatch_bp.route('/api/dispatch/multi_objective', methods=['POST'])
 def exec_multi_objective_dispatch():
-    """执行多目标优化调度"""
+    """
+    执行多目标优化调度接口
+    
+    请求参数：
+        start_date: str - 调度开始日期（格式：YYYY-MM-DD）
+        forecasts: dict - 预测数据（可选）
+            wind_power: list - 风力发电预测值
+            pv_power: list - 光伏发电预测值
+            load: list - 负荷预测值
+        price_buy: list - 购电价格（可选）
+        price_sell: list - 售电价格（可选）
+        ess_params: dict - 储能参数（可选）
+        algorithm: str - 优化算法（可选，默认为 'awpso'）
+    
+    返回值：
+        code: 200 - 调度执行成功
+        data: dict - 调度结果
+            dispatch_id: int - 调度记录ID
+            schedule_date: str - 调度日期
+            solutions: list - 帕累托前沿（非支配解集）
+            all_solutions: list - 全部4个解（含被支配解）
+            best_solution: dict - 综合最优解
+            pareto_objectives: list - 帕累托目标坐标
+            weight_labels: list - 权重标签
+    
+    错误处理：
+        400 - 没有可用的预测数据或预测数据格式错误
+        500 - 多目标调度执行错误
+    """
     try:
         data = request.json
         
@@ -193,7 +258,30 @@ def exec_multi_objective_dispatch():
 
 @dispatch_bp.route('/api/dispatch/history', methods=['GET'])
 def get_dispatch_history():
-    """获取调度历史"""
+    """
+    获取调度历史接口
+    
+    查询参数：
+        limit: int - 返回记录数（可选，默认为10）
+        start_date: str - 开始日期（可选，格式：YYYY-MM-DD）
+        end_date: str - 结束日期（可选，格式：YYYY-MM-DD）
+    
+    返回值：
+        code: 200 - 获取成功
+        data: list - 调度历史记录
+            每个元素为调度记录字典
+                id: int - 调度记录ID
+                schedule_date: str - 调度日期
+                charge_plan: list - 充电计划
+                discharge_plan: list - 放电计划
+                soc_curve: list - 荷电状态曲线
+                abandon_rate: float - 弃风弃光率
+                cost: float - 成本
+                created_at: str - 创建时间
+    
+    错误处理：
+        500 - 查询错误
+    """
     try:
         # 获取查询参数
         limit = request.args.get('limit', 10, type=int)
@@ -231,7 +319,35 @@ def get_dispatch_history():
 
 @dispatch_bp.route('/api/dispatch/detail/<int:dispatch_id>', methods=['GET'])
 def get_dispatch_detail(dispatch_id):
-    """获取调度详情"""
+    """
+    获取调度详情接口
+    
+    路径参数：
+        dispatch_id: int - 调度记录ID
+    
+    返回值：
+        code: 200 - 获取成功
+        data: dict - 调度详情
+            id: int - 调度记录ID
+            schedule_date: str - 调度日期
+            charge_plan: list - 充电计划
+            discharge_plan: list - 放电计划
+            soc_curve: list - 荷电状态曲线
+            abandon_rate: float - 弃风弃光率
+            cost: float - 成本
+            statistics: dict - 统计信息
+                total_charge: float - 总充电量
+                total_discharge: float - 总放电量
+                max_soc: float - 最大荷电状态
+                min_soc: float - 最小荷电状态
+                avg_soc: float - 平均荷电状态
+                efficiency: float - 效率
+            created_at: str - 创建时间
+    
+    错误处理：
+        404 - 调度记录不存在
+        500 - 查询错误
+    """
     try:
         dispatch = DispatchResult.query.get(dispatch_id)
         if not dispatch:
@@ -271,7 +387,30 @@ def get_dispatch_detail(dispatch_id):
 
 @dispatch_bp.route('/api/dispatch/simulate', methods=['POST'])
 def simulate_dispatch():
-    """模拟调度执行效果"""
+    """
+    模拟调度执行效果接口
+    
+    请求参数：
+        dispatch_id: int - 调度记录ID
+    
+    返回值：
+        code: 200 - 模拟成功
+        data: dict - 模拟结果
+            actual_wind: list - 实际风力发电数据
+            actual_pv: list - 实际光伏发电数据
+            actual_load: list - 实际负荷数据
+            grid_power: list - 电网功率
+            buy_power: list - 购电功率
+            sell_power: list - 售电功率
+            actual_cost: float - 实际成本
+            planned_cost: float - 计划成本
+            cost_deviation: float - 成本偏差
+    
+    错误处理：
+        400 - 缺少调度ID或该日期没有实际数据
+        404 - 调度记录不存在
+        500 - 模拟错误
+    """
     try:
         data = request.json
         dispatch_id = data.get('dispatch_id')
@@ -345,7 +484,20 @@ def simulate_dispatch():
 
 @dispatch_bp.route('/api/dispatch/statistics', methods=['GET'])
 def get_dispatch_statistics():
-    """获取调度统计信息"""
+    """
+    获取调度统计信息接口
+    
+    返回值：
+        code: 200 - 获取成功
+        data: dict - 统计信息
+            total_dispatches: int - 总调度次数
+            avg_cost: float - 平均成本
+            avg_abandon_rate: float - 平均弃风弃光率
+            total_savings: float - 总节约
+    
+    错误处理：
+        500 - 统计错误
+    """
     try:
         # 获取所有调度记录
         dispatches = DispatchResult.query.all()

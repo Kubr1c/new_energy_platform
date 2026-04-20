@@ -191,7 +191,7 @@ export default {
   components: { VChart },
   data() {
     return {
-      modelType: 'attention_lstm',
+      modelType: 'cnn_lstm',
       predictType: 'multi',
       predictHorizon: 24,
       modelVersion: 'v1.0',
@@ -275,6 +275,7 @@ export default {
         }
       } catch (error) {
         console.warn('加载模型列表失败，使用默认列表', error)
+        // 保持使用默认模型列表
       }
     },
     normalizeChartData(values) {
@@ -380,7 +381,8 @@ export default {
           }
         }
       } catch (error) {
-        this.$message.error('加载预测历史失败')
+        console.warn('加载预测历史失败，使用空数据', error)
+        this.predictionHistory = []
       } finally {
         this.historyLoading = false
       }

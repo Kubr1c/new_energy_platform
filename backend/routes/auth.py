@@ -1,3 +1,8 @@
+"""
+认证相关API路由
+提供用户注册、登录、个人信息管理等功能
+"""
+
 from flask import Blueprint, request, jsonify, current_app
 from models.database import db, User
 import jwt
@@ -13,7 +18,13 @@ def _get_secret_key():
 
 
 def token_required(f):
-    """JWT令牌验证装饰器"""
+    """
+    JWT令牌验证装饰器
+    
+    功能：验证请求中的JWT令牌，确保用户已登录
+    参数：f - 被装饰的函数
+    返回：验证通过后执行原函数，否则返回错误信息
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
@@ -44,7 +55,26 @@ def token_required(f):
 
 @auth_bp.route('/api/auth/register', methods=['POST'])
 def register():
-    """用户注册"""
+    """
+    用户注册接口
+    
+    请求参数：
+        username: str - 用户名
+        password: str - 密码
+        role: str - 角色（可选，默认为operator）
+    
+    返回值：
+        code: 200 - 注册成功
+        message: str - 操作结果消息
+        data: dict - 用户信息
+            id: int - 用户ID
+            username: str - 用户名
+            role: str - 用户角色
+    
+    错误处理：
+        400 - 缺少必填字段或用户名已存在
+        500 - 注册失败
+    """
     try:
         data = request.json
         
@@ -89,7 +119,28 @@ def register():
 
 @auth_bp.route('/api/auth/login', methods=['POST'])
 def login():
-    """用户登录"""
+    """
+    用户登录接口
+    
+    请求参数：
+        username: str - 用户名
+        password: str - 密码
+    
+    返回值：
+        code: 200 - 登录成功
+        message: str - 操作结果消息
+        data: dict - 登录信息
+            token: str - JWT令牌
+            user: dict - 用户信息
+                id: int - 用户ID
+                username: str - 用户名
+                role: str - 用户角色
+    
+    错误处理：
+        400 - 缺少用户名或密码
+        401 - 用户名或密码错误
+        500 - 登录失败
+    """
     try:
         data = request.json
         
@@ -133,7 +184,19 @@ def login():
 @auth_bp.route('/api/auth/profile', methods=['GET'])
 @token_required
 def get_profile(current_user):
-    """获取用户信息"""
+    """
+    获取用户信息接口
+    
+    功能：获取当前登录用户的详细信息
+    
+    返回值：
+        code: 200 - 获取成功
+        data: dict - 用户信息
+            id: int - 用户ID
+            username: str - 用户名
+            role: str - 用户角色
+            created_at: str - 创建时间
+    """
     return jsonify({
         'code': 200,
         'data': {
@@ -147,7 +210,21 @@ def get_profile(current_user):
 @auth_bp.route('/api/auth/change_password', methods=['POST'])
 @token_required
 def change_password(current_user):
-    """修改密码"""
+    """
+    修改密码接口
+    
+    请求参数：
+        old_password: str - 旧密码
+        new_password: str - 新密码
+    
+    返回值：
+        code: 200 - 修改成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        400 - 缺少必填字段或旧密码错误
+        500 - 密码修改失败
+    """
     try:
         data = request.json
         
@@ -174,7 +251,25 @@ def change_password(current_user):
 @auth_bp.route('/api/auth/users', methods=['GET'])
 @token_required
 def get_users(current_user):
-    """获取用户列表（仅管理员）"""
+    """
+    获取用户列表接口（仅管理员）
+    
+    功能：获取所有用户的详细信息
+    权限：仅管理员可访问
+    
+    返回值：
+        code: 200 - 获取成功
+        data: list - 用户列表
+            每个元素为用户信息字典
+                id: int - 用户ID
+                username: str - 用户名
+                role: str - 用户角色
+                created_at: str - 创建时间
+    
+    错误处理：
+        403 - 权限不足
+        500 - 查询失败
+    """
     if current_user.role != 'admin':
         return jsonify({'code': 403, 'message': '权限不足'})
     
@@ -197,7 +292,29 @@ def get_users(current_user):
 @auth_bp.route('/api/auth/users/<int:user_id>', methods=['PUT'])
 @token_required
 def update_user(current_user, user_id):
-    """更新用户信息（仅管理员）"""
+    """
+    更新用户信息接口（仅管理员）
+    
+    功能：更新指定用户的角色信息
+    权限：仅管理员可访问
+    
+    请求参数：
+        role: str - 新角色（admin/operator/viewer）
+    
+    返回值：
+        code: 200 - 更新成功
+        message: str - 操作结果消息
+        data: dict - 用户信息
+            id: int - 用户ID
+            username: str - 用户名
+            role: str - 用户角色
+    
+    错误处理：
+        403 - 权限不足
+        404 - 用户不存在
+        400 - 无效的角色
+        500 - 更新失败
+    """
     if current_user.role != 'admin':
         return jsonify({'code': 403, 'message': '权限不足'})
     
@@ -234,7 +351,22 @@ def update_user(current_user, user_id):
 @auth_bp.route('/api/auth/users/<int:user_id>', methods=['DELETE'])
 @token_required
 def delete_user(current_user, user_id):
-    """删除用户（仅管理员）"""
+    """
+    删除用户接口（仅管理员）
+    
+    功能：删除指定用户
+    权限：仅管理员可访问
+    
+    返回值：
+        code: 200 - 删除成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        403 - 权限不足
+        404 - 用户不存在
+        400 - 不能删除当前登录用户
+        500 - 删除失败
+    """
     if current_user.role != 'admin':
         return jsonify({'code': 403, 'message': '权限不足'})
     
@@ -259,26 +391,44 @@ def delete_user(current_user, user_id):
 @auth_bp.route('/api/auth/users/<int:user_id>/reset_password', methods=['POST'])
 @token_required
 def reset_user_password(current_user, user_id):
-    """reset user password (admin only)"""
+    """
+    重置用户密码接口（仅管理员）
+    
+    功能：重置指定用户的密码
+    权限：仅管理员可访问
+    
+    请求参数：
+        new_password: str - 新密码
+    
+    返回值：
+        code: 200 - 重置成功
+        message: str - 操作结果消息
+    
+    错误处理：
+        403 - 权限不足
+        404 - 用户不存在
+        400 - 缺少新密码字段
+        500 - 密码重置失败
+    """
     if current_user.role != 'admin':
-        return jsonify({'code': 403, 'message': 'insufficient permissions'})
+        return jsonify({'code': 403, 'message': '权限不足'})
     
     try:
         user = db.session.get(User, user_id)
         
         if not user:
-            return jsonify({'code': 404, 'message': 'user does not exist'})
+            return jsonify({'code': 404, 'message': '用户不存在'})
         
         data = request.json
         if not data or not data.get('new_password'):
-            return jsonify({'code': 400, 'message': 'missing new_password field'})
+            return jsonify({'code': 400, 'message': '缺少新密码字段'})
         
-        # update password (使用哈希存储)
+        # 更新密码（使用哈希存储）
         user.set_password(data['new_password'])
         db.session.commit()
         
-        return jsonify({'code': 200, 'message': 'password reset successfully'})
+        return jsonify({'code': 200, 'message': '密码重置成功'})
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'code': 500, 'message': f'password reset failed: {str(e)}'})
+        return jsonify({'code': 500, 'message': f'密码重置失败: {str(e)}'})

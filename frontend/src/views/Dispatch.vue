@@ -297,7 +297,7 @@ export default {
   components: { VChart },
   data() {
     return {
-      dispatchDate: '',   // 由 mounted() 从数据集最新日期动态设置，避免使用系统当前日期
+      dispatchDate: new Date().toISOString().split('T')[0],
       algorithm: 'awpso',
       dispatchLoading: false,
       multiLoading: false,
@@ -406,17 +406,10 @@ export default {
       this.updateDispatchChart(this.latestDispatchResult || {})
     }
   },
-  async mounted() {
-    // 从数据集中获取最新日期作为默认调度日期，避免使用系统当前日期
-    try {
-      const res = await this.$http.get('/api/data/dataset_date')
-      if (res.data && res.data.code === 200) {
-        this.dispatchDate = res.data.data.dispatch_default
-      }
-    } catch (e) {
-      // 接口失败时降级到数据集已知最新日期
-      this.dispatchDate = '2026-04-10'
-    }
+  mounted() {
+    // 初始状态为空，等待执行优化调度
+    // 生成模拟数据用于测试
+    this.generateMockData()
   },
   methods: {
     async runDispatch() {
@@ -572,6 +565,18 @@ export default {
     },
     async updateDispatchChart(data) {
       if (this.resultChartType === 'power') {
+        // 功率曲线配置
+        this.dispatchChartOption = {
+          tooltip: { trigger: 'axis' },
+          legend: { data: ['风电', '光伏', '负荷', '充电', '放电'] },
+          xAxis: { 
+            type: 'category', 
+            data: Array.from({length: 24}, (_, i) => `${i}:00`)
+          },
+          yAxis: { type: 'value', name: '功率(MW)' },
+          series: []
+        }
+        
         // 获取历史数据用于显示风电、光伏、负荷
         try {
           const response = await this.$http.get('/api/data/latest')
@@ -607,9 +612,32 @@ export default {
           console.error('获取历史数据失败:', error)
         }
       } else {
-        this.dispatchChartOption.series = [
-          { name: 'SOC', type: 'line', data: data.soc_curve?.map(soc => soc * 100) || [] }
-        ]
+        // SOC曲线配置
+        this.dispatchChartOption = {
+          tooltip: { trigger: 'axis' },
+          legend: { data: ['SOC'] },
+          xAxis: { 
+            type: 'category', 
+            data: Array.from({length: 24}, (_, i) => `${i}:00`)
+          },
+          yAxis: {
+            type: 'value',
+            name: 'SOC(%)',
+            min: 0,
+            max: 100,
+            interval: 20
+          },
+          series: [
+            {
+              name: 'SOC',
+              type: 'line',
+              data: data.soc_curve?.map(soc => soc * 100) || [],
+              lineStyle: { width: 3, color: '#409EFF' },
+              itemStyle: { color: '#409EFF' },
+              smooth: true
+            }
+          ]
+        }
       }
     },
     showWeightDialog() {
